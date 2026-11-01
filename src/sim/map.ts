@@ -1,16 +1,45 @@
 import type { BuildingType } from "../data/buildings";
 
-export const Ground = { lot: 0, road: 1, sidewalk: 2, green: 3, viaduct: 4, dirt: 5 } as const;
+export const Ground = { lot: 0, road: 1, sidewalk: 2, green: 3, viaduct: 4, dirt: 5, outside: 255 } as const;
 export const Solid = { free: 0, building: 1, cover: 2 } as const;
+
+/** 区画の一辺（m）。tools/osm_to_map.py の CHUNK と揃える */
+export const CHUNK = 128;
+/** 読み込んだ区画を置いておく格子の一辺（m）。端と端がつながっていて、座標の下位ビットだけでマスを引く */
+const RING_BITS = 10;
+const RING = 1 << RING_BITS;
+const RING_MASK = RING - 1;
+const SLOTS = RING / CHUNK;
 
 /** 地面に描く表示。座標はマップのセル単位、angle は道の伸びる向き（ラジアン） */
 export type Marking = { x: number; y: number; angle: number; len: number };
 
-export type MapJson = {
+export type MapBuilding = {
+  /** マップ全体で一意。見た目のばらつきの種にする */
+  id: number;
+  kind: string;
+  type: BuildingType;
+  h: number;
+  /** 道に面した側。0:北 1:東 2:南 3:西 */
+  front: 0 | 1 | 2 | 3;
+  rects: [number, number, number, number][];
+};
+
+export type MapCover = { id: number; kind: string; x: number; y: number; w: number; h: number };
+
+export type Markings = {
+  crosswalks: Marking[];
+  stops: Marking[];
+  lines: { pts: [number, number][]; dash: boolean }[];
+  manholes: [number, number][];
+};
+
+/** public/maps/<名前>/index.json */
+export type MapIndex = {
   name: string;
   width: number;
   height: number;
-  cell: number;
+  chunk: number;
   attribution: string;
   /** 位置はマップの幅・高さに対する割合（0〜1） */
   layout: {
@@ -19,27 +48,29 @@ export type MapJson = {
     /** 勢力の番号ごとの縄張り [左, 上, 右, 下] */
     factionAreas: Record<string, [number, number, number, number]>;
   };
-  ground: string;
-  solid: string;
-  buildings: {
-    kind: string;
-    type: BuildingType;
-    h: number;
-    /** 道に面した側。0:北 1:東 2:南 3:西 */
-    front: 0 | 1 | 2 | 3;
-    rects: [number, number, number, number][];
-  }[];
-  covers: { kind: string; x: number; y: number; w: number; h: number }[];
-  markings: {
-    crosswalks: Marking[];
-    stops: Marking[];
-    lines: { pts: [number, number][]; dash: boolean }[];
-    manholes: [number, number][];
-  };
-  /** street は通りの名前、station は駅名 */
-  signs: { kind: "street" | "station"; x: number; y: number; text: string[] }[];
   /** 町名と、その中心 */
   areas: { name: string; x: number; y: number }[];
+  /** ファイルがある区画の番号 [i, j] */
+  chunks: [number, number][];
+};
+
+/** public/maps/<名前>/<i>_<j>.json.gz。区画は x が i * CHUNK から、y が j * CHUNK から CHUNK 四方 */
+export type ChunkJson = {
+  i: number;
+  j: number;
+  /** CHUNK * CHUNK バイト。マップの外は Ground.outside */
+  ground: string;
+  solid: string;
+  /** btype の 1 以上の値が指す建物の種類（値 - 1 が添字）。0 は建物でない */
+  types: BuildingType[];
+  btype: string;
+  /** 左上の角がこの区画にある建物。ほかの区画にはみ出すこともある */
+  buildings: MapBuilding[];
+  covers: MapCover[];
+  /** 区画の外の少し先までのものも入っている。地面のテクスチャに描くため */
+  markings: Markings;
+  /** street は通りの名前、station は駅名 */
+  signs: { kind: "street" | "station"; x: number; y: number; text: string[] }[];
 };
 
 function decode(b64: string): Uint8Array {
@@ -102,44 +133,89 @@ export type Vec = { x: number; y: number };
 /** 通れるが避けたい場所。cellCost はそのセルに入るときに1歩あたりへ足す重み、lineOk はまっすぐ歩いてよい線分か */
 export type PathAvoid = { cellCost: (cx: number, cy: number) => number; lineOk: (a: Vec, b: Vec) => boolean };
 
+export const chunkKey = (i: number, j: number) => `${i}_${j}`;
+
+/** マス (cx, cy) がある区画の番号 */
+export const chunkOf = (c: number) => Math.floor(c / CHUNK);
+
 export class GameMap {
   readonly name: string;
+  /** マップの範囲（m）。区画ごとに敵や箱を置くようになったら使わなくなる */
   readonly w: number;
   readonly h: number;
-  readonly ground: Uint8Array;
-  readonly solid: Uint8Array;
-  readonly json: MapJson;
-  /** セルごとの建物の番号（json.buildings の添字）。建物でなければ -1 */
-  private readonly buildingIndex: Int32Array;
+  readonly index: MapIndex;
+  /** 読み込んである区画 */
+  readonly chunks = new Map<string, ChunkJson>();
+  /** 区画が変わるたびに増える。描画が作り直すかを決める */
+  version = 0;
 
+  private ground = new Uint8Array(RING * RING);
+  private solid = new Uint8Array(RING * RING);
   /** 読み込んだときの solid。遮蔽物のスキルで書き換えた分を、ランの始めに戻す */
-  private baseSolid: Uint8Array;
-  private gScore: Float32Array;
-  private came: Int32Array;
-  private stamp: Uint32Array;
-  private closed: Uint32Array;
+  private baseSolid = new Uint8Array(RING * RING);
+  private btype = new Uint8Array(RING * RING);
+  /** 格子の区画の置き場所ごとに、置いてある区画の番号。空きは NaN */
+  private slotI = new Float64Array(SLOTS * SLOTS).fill(NaN);
+  private slotJ = new Float64Array(SLOTS * SLOTS).fill(NaN);
+  private slotTypes: BuildingType[][] = [];
+
+  private gScore = new Float32Array(RING * RING);
+  private came = new Int32Array(RING * RING);
+  private stamp = new Uint32Array(RING * RING);
+  private closed = new Uint32Array(RING * RING);
   private gen = 1;
   private heap = new MinHeap();
 
-  constructor(json: MapJson) {
-    this.json = json;
-    this.name = json.name;
-    this.w = json.width;
-    this.h = json.height;
-    this.ground = decode(json.ground);
-    this.solid = decode(json.solid);
-    this.baseSolid = this.solid.slice();
-    const n = this.w * this.h;
-    this.buildingIndex = new Int32Array(n).fill(-1);
-    json.buildings.forEach((b, bi) => {
-      for (const [x, y, w, h] of b.rects) {
-        for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) this.buildingIndex[xx + yy * this.w] = bi;
-      }
-    });
-    this.gScore = new Float32Array(n);
-    this.came = new Int32Array(n);
-    this.stamp = new Uint32Array(n);
-    this.closed = new Uint32Array(n);
+  constructor(index: MapIndex) {
+    if (index.chunk !== CHUNK) throw new Error(`区画の大きさが合わない: ${index.chunk}`);
+    this.index = index;
+    this.name = index.name;
+    this.w = index.width;
+    this.h = index.height;
+  }
+
+  private slot(i: number, j: number) {
+    return (i & (SLOTS - 1)) | ((j & (SLOTS - 1)) * SLOTS);
+  }
+
+  private loaded(cx: number, cy: number) {
+    const i = chunkOf(cx), j = chunkOf(cy);
+    const s = this.slot(i, j);
+    return this.slotI[s] === i && this.slotJ[s] === j;
+  }
+
+  hasChunk(i: number, j: number) {
+    return this.chunks.has(chunkKey(i, j));
+  }
+
+  /** 区画を格子に書き込む。同じ置き場所に別の区画があれば、それを捨てる */
+  addChunk(c: ChunkJson) {
+    const s = this.slot(c.i, c.j);
+    if (!Number.isNaN(this.slotI[s])) this.removeChunk(this.slotI[s], this.slotJ[s]);
+    const ground = decode(c.ground), solid = decode(c.solid), btype = decode(c.btype);
+    const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
+    for (let y = 0; y < CHUNK; y++) {
+      const row = ((y0 + y) & RING_MASK) * RING + (x0 & RING_MASK);
+      const src = y * CHUNK;
+      this.ground.set(ground.subarray(src, src + CHUNK), row);
+      this.solid.set(solid.subarray(src, src + CHUNK), row);
+      this.baseSolid.set(solid.subarray(src, src + CHUNK), row);
+      this.btype.set(btype.subarray(src, src + CHUNK), row);
+    }
+    this.slotI[s] = c.i;
+    this.slotJ[s] = c.j;
+    this.slotTypes[s] = c.types;
+    this.chunks.set(chunkKey(c.i, c.j), c);
+    this.version++;
+  }
+
+  removeChunk(i: number, j: number) {
+    const s = this.slot(i, j);
+    if (this.slotI[s] !== i || this.slotJ[s] !== j) return;
+    this.slotI[s] = NaN;
+    this.slotJ[s] = NaN;
+    this.chunks.delete(chunkKey(i, j));
+    this.version++;
   }
 
   resetSolid() {
@@ -150,7 +226,7 @@ export class GameMap {
   areaAt(x: number, y: number): string | null {
     let best: string | null = null;
     let bd = Infinity;
-    for (const a of this.json.areas) {
+    for (const a of this.index.areas) {
       const d = (a.x - x) ** 2 + (a.y - y) ** 2;
       if (d < bd) {
         bd = d;
@@ -160,9 +236,10 @@ export class GameMap {
     return best;
   }
 
+  /** 読み込んでいない所は塞がっている扱いにする */
   blocked(cx: number, cy: number): boolean {
-    if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return true;
-    return this.solid[cx + cy * this.w] !== Solid.free;
+    if (!this.loaded(cx, cy)) return true;
+    return this.solid[(cx & RING_MASK) | ((cy & RING_MASK) << RING_BITS)] !== Solid.free;
   }
 
   blockedAt(x: number, y: number): boolean {
@@ -250,28 +327,40 @@ export class GameMap {
   }
 
   solidAt(cx: number, cy: number): number {
-    if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return Solid.building;
-    return this.solid[cx + cy * this.w];
+    if (!this.loaded(cx, cy)) return Solid.building;
+    return this.solid[(cx & RING_MASK) | ((cy & RING_MASK) << RING_BITS)];
+  }
+
+  groundAt(cx: number, cy: number): number {
+    if (!this.loaded(cx, cy)) return Ground.outside;
+    return this.ground[(cx & RING_MASK) | ((cy & RING_MASK) << RING_BITS)];
   }
 
   /** 遮蔽物のスキルで立てた壁を書き込む。resetSolid で元に戻る */
   setSolid(cx: number, cy: number, v: number) {
-    this.solid[cx + cy * this.w] = v;
+    if (!this.loaded(cx, cy)) return;
+    this.solid[(cx & RING_MASK) | ((cy & RING_MASK) << RING_BITS)] = v;
   }
 
-  /** そのマスの建物。建物でなければ null */
-  buildingAt(cx: number, cy: number): MapJson["buildings"][number] | null {
-    if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return null;
-    const b = this.buildingIndex[cx + cy * this.w];
-    return b >= 0 ? this.json.buildings[b] : null;
+  /** そのマスの建物の種類。建物でなければ null */
+  buildingAt(cx: number, cy: number): BuildingType | null {
+    if (!this.loaded(cx, cy)) return null;
+    const t = this.btype[(cx & RING_MASK) | ((cy & RING_MASK) << RING_BITS)];
+    return t ? this.slotTypes[this.slot(chunkOf(cx), chunkOf(cy))][t - 1] : null;
   }
 
   findPath(a: Vec, b: Vec, maxNodes = 30000, avoid?: PathAvoid): Vec[] | null {
-    const w = this.w;
     const sx = Math.floor(a.x), sy = Math.floor(a.y);
     const tx = Math.floor(b.x), ty = Math.floor(b.y);
     if (this.blocked(tx, ty)) return null;
-    const start = sx + sy * w, goal = tx + ty * w;
+    // 出発点を真ん中にした RING 四方の中だけを探す。読み込んである範囲はこれより狭い
+    const ox = sx - RING / 2, oy = sy - RING / 2;
+    const idx = (x: number, y: number) => {
+      const lx = x - ox, ly = y - oy;
+      return lx < 0 || ly < 0 || lx >= RING || ly >= RING ? -1 : lx + ly * RING;
+    };
+    const start = idx(sx, sy), goal = idx(tx, ty);
+    if (goal < 0) return null;
     const gen = ++this.gen;
     const heap = this.heap;
     heap.clear();
@@ -294,14 +383,14 @@ export class GameMap {
         break;
       }
       if (++expanded > maxNodes) break;
-      const cx = cur % w, cy = (cur / w) | 0;
+      const cx = (cur & RING_MASK) + ox, cy = (cur >> RING_BITS) + oy;
       const g = this.gScore[cur];
       for (const [dx, dy, cost] of dirs) {
         const nx = cx + dx, ny = cy + dy;
         if (this.blocked(nx, ny)) continue;
         if (dx !== 0 && dy !== 0 && (this.blocked(cx + dx, cy) || this.blocked(cx, cy + dy))) continue;
-        const n = nx + ny * w;
-        if (this.closed[n] === gen) continue;
+        const n = idx(nx, ny);
+        if (n < 0 || this.closed[n] === gen) continue;
         const ng = g + cost * (1 + (avoid ? avoid.cellCost(nx, ny) : 0));
         if (this.stamp[n] === gen && this.gScore[n] <= ng) continue;
         this.stamp[n] = gen;
@@ -314,7 +403,7 @@ export class GameMap {
     }
     if (!found) return null;
     const cells: Vec[] = [];
-    for (let c = goal; c !== -1; c = this.came[c]) cells.push({ x: (c % w) + 0.5, y: ((c / w) | 0) + 0.5 });
+    for (let c = goal; c !== -1; c = this.came[c]) cells.push({ x: (c & RING_MASK) + ox + 0.5, y: (c >> RING_BITS) + oy + 0.5 });
     cells.reverse();
     cells[cells.length - 1] = { x: b.x, y: b.y };
     // 見通せるところは飛ばして、まっすぐ歩けるようにする

@@ -29,11 +29,13 @@ export class MapView {
     const ctx = c.getContext("2d")!;
     const img = ctx.createImageData(map.w, map.h);
     for (let i = 0; i < map.w * map.h; i++) {
+      const x = i % map.w, y = (i / map.w) | 0;
+      const solid = map.solidAt(x, y);
       let r: number, g: number, b: number;
-      if (map.solid[i] === Solid.building) [r, g, b] = [150, 144, 132];
-      else if (map.solid[i] === Solid.cover) [r, g, b] = [190, 170, 110];
+      if (solid === Solid.building) [r, g, b] = [150, 144, 132];
+      else if (solid === Solid.cover) [r, g, b] = [190, 170, 110];
       else {
-        const gc = GROUND_COLORS[map.ground[i]] ?? GROUND_COLORS[0];
+        const gc = GROUND_COLORS[map.groundAt(x, y)] ?? GROUND_COLORS[0];
         [r, g, b] = [gc[0] * 0.4 + 10, gc[1] * 0.4 + 10, gc[2] * 0.4 + 14];
       }
       img.data[i * 4] = r;

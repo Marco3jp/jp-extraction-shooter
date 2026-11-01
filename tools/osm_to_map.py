@@ -5,8 +5,11 @@
 
 使い方:
   python3 -I tools/osm_to_map.py tools/maps/akihabara.json [--preview preview.png]
+
+設定の out のディレクトリに、128m 四方の区画ごとの <i>_<j>.json.gz と、一覧の index.json を書き出す。
 """
 import base64
+import gzip
 import json
 import math
 import os
@@ -628,27 +631,21 @@ def main():
     out_b = []
     for b, rects in rects_by_b.items():
         bb = buildings[b]
-        out_b.append(dict(kind=bb["kind"], type=bb["type"], h=round(bb["h"], 1), front=front_of(b), rects=rects))
+        out_b.append(dict(id=len(out_b), kind=bb["kind"], type=bb["type"], h=round(bb["h"], 1), front=front_of(b), rects=rects))
+    for i, c in enumerate(covers):
+        c["id"] = i
 
     features = place_features(
         cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_lines, buildings, rects_by_b, nodes, proj,
     )
 
-    flat_ground = bytes(v for row in ground for v in row)
-    flat_solid = bytes(v for row in solid for v in row)
-    out = dict(
-        name=cfg["name"],
-        width=W, height=H, cell=1,
-        attribution="© OpenStreetMap contributors (ODbL)",
-        layout=cfg["layout"],
-        ground=base64.b64encode(flat_ground).decode(),
-        solid=base64.b64encode(flat_solid).decode(),
-        buildings=out_b,
-        covers=covers,
-        **features,
-    )
-    with open(cfg["out"], "w") as f:
-        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+    btype = grid(W, H, None)
+    for y in range(H):
+        for x in range(W):
+            if bid[y][x] >= 0:
+                btype[y][x] = buildings[bid[y][x]]["type"]
+    sizes = write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features)
+    print(f"区画 {len(sizes)} 個、1区画 平均 {sum(sizes) / len(sizes) / 1024:.1f}KB・最大 {max(sizes) / 1024:.1f}KB")
     types = Counter(b["type"] for b in out_b)
     m = features["markings"]
     print(f"{W0}x{H0} → {W}x{H}（列 {len(cut_cols)}・行 {len(cut_rows)} を切り詰め）"
@@ -679,6 +676,95 @@ def main():
         png += chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
         open(preview, "wb").write(png)
 
+
+
+# 区画の一辺（m）。src/sim/map.ts の CHUNK と揃える
+CHUNK = 128
+# 地面に描く表示は、区画の外のこの距離（m）までのものも入れる。境目をまたぐ横断歩道などを両側の地面に描くため
+PAINT_MARGIN = 8
+# マップの外のマス。src/sim/map.ts の Ground.outside と揃える
+OUTSIDE = 255
+
+
+def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
+    """CHUNK 四方の区画ごとに、gzip した JSON を書き出す。建物・遮蔽物・標識は、左上の角や位置がある区画にまるごと入れる"""
+    out_dir = cfg["out"]
+    os.makedirs(out_dir, exist_ok=True)
+    for f in os.listdir(out_dir):
+        if f.endswith(".json.gz"):
+            os.remove(os.path.join(out_dir, f))
+    ni, nj = (W + CHUNK - 1) // CHUNK, (H + CHUNK - 1) // CHUNK
+
+    def owner(x, y):
+        return (int(x) // CHUNK, int(y) // CHUNK)
+
+    def near(x, y, i, j):
+        return i * CHUNK - PAINT_MARGIN <= x < (i + 1) * CHUNK + PAINT_MARGIN and j * CHUNK - PAINT_MARGIN <= y < (j + 1) * CHUNK + PAINT_MARGIN
+
+    def overlaps(pts, i, j):
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return (min(xs) < (i + 1) * CHUNK + PAINT_MARGIN and max(xs) >= i * CHUNK - PAINT_MARGIN
+                and min(ys) < (j + 1) * CHUNK + PAINT_MARGIN and max(ys) >= j * CHUNK - PAINT_MARGIN)
+
+    m = features["markings"]
+    sizes = []
+    chunks = []
+    for j in range(nj):
+        for i in range(ni):
+            g = bytearray()
+            sd = bytearray()
+            types = []
+            bt = bytearray()
+            for y in range(j * CHUNK, (j + 1) * CHUNK):
+                for x in range(i * CHUNK, (i + 1) * CHUNK):
+                    if x >= W or y >= H:
+                        g.append(OUTSIDE)
+                        sd.append(BUILDING)
+                        bt.append(0)
+                        continue
+                    g.append(ground[y][x])
+                    sd.append(solid[y][x])
+                    t = btype[y][x]
+                    if t is None:
+                        bt.append(0)
+                    else:
+                        if t not in types:
+                            types.append(t)
+                        bt.append(types.index(t) + 1)
+            body = dict(
+                i=i, j=j,
+                ground=base64.b64encode(bytes(g)).decode(),
+                solid=base64.b64encode(bytes(sd)).decode(),
+                types=types,
+                btype=base64.b64encode(bytes(bt)).decode(),
+                buildings=[b for b in out_b if owner(b["rects"][0][0], b["rects"][0][1]) == (i, j)],
+                covers=[c for c in covers if owner(c["x"], c["y"]) == (i, j)],
+                markings=dict(
+                    crosswalks=[c for c in m["crosswalks"] if near(c["x"], c["y"], i, j)],
+                    stops=[c for c in m["stops"] if near(c["x"], c["y"], i, j)],
+                    lines=[l for l in m["lines"] if overlaps(l["pts"], i, j)],
+                    manholes=[p for p in m["manholes"] if near(p[0], p[1], i, j)],
+                ),
+                signs=[sg for sg in features["signs"] if owner(sg["x"], sg["y"]) == (i, j)],
+            )
+            raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+            data = gzip.compress(raw, 9, mtime=0)
+            with open(os.path.join(out_dir, f"{i}_{j}.json.gz"), "wb") as f:
+                f.write(data)
+            sizes.append(len(data))
+            chunks.append([i, j])
+    index = dict(
+        name=cfg["name"],
+        width=W, height=H, chunk=CHUNK,
+        attribution="© OpenStreetMap contributors (ODbL)",
+        layout=cfg["layout"],
+        areas=features["areas"],
+        chunks=chunks,
+    )
+    with open(os.path.join(out_dir, "index.json"), "w") as f:
+        json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
+    return sizes
 
 
 # 交差点の外側に横断歩道を描く道の幅（m）。これより細い道どうしの交差点には描かない

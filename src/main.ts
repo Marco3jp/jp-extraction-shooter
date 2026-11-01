@@ -6,7 +6,8 @@ import { InputState } from "./input";
 import { Renderer } from "./render/renderer";
 import { DEATH_LOSES_RUN_LOOT, DT, MATERIALS, type MaterialId } from "./sim/data";
 import { bagCount } from "./sim/inventory";
-import { GameMap, type MapJson } from "./sim/map";
+import { GameMap } from "./sim/map";
+import { fetchChunk, fetchIndex } from "./maploader";
 import { nearestLoot, step } from "./sim/sim";
 import { LOOT_PANEL_RANGE } from "./sim/data";
 import { createWorld, type World } from "./sim/world";
@@ -20,8 +21,8 @@ import type { LastRunSummary } from "./ui/hub/types";
 type Mode = "hub" | "playing" | "paused" | "ending";
 
 async function main() {
-  const res = await fetch(`${import.meta.env.BASE_URL}maps/akihabara.json`);
-  const map = new GameMap((await res.json()) as MapJson);
+  const map = new GameMap(await fetchIndex("akihabara"));
+  for (const c of await Promise.all(map.index.chunks.map(([i, j]) => fetchChunk("akihabara", i, j)))) map.addChunk(c);
   const app = document.getElementById("app")!;
   const hubEl = document.getElementById("hub")!;
   const overlay = document.getElementById("overlay")!;

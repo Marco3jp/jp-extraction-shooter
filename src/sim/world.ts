@@ -388,7 +388,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   };
 
   map.resetSolid();
-  const layout = map.json.layout;
+  const layout = map.index.layout;
   const startPos = start
     ? nearestFree(start.x, start.y)
     : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h);
@@ -503,7 +503,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     const x = i % W, y = (i / W) | 0;
     for (const [nx, ny] of [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]) {
       const b = map.buildingAt(nx, ny);
-      if (b) return LOOT_TILT[BUILDING_USE[b.type]] ?? {};
+      if (b) return LOOT_TILT[BUILDING_USE[b]] ?? {};
     }
     return {};
   };

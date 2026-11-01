@@ -1,7 +1,7 @@
 // 街並みの描画：地面の表示、建物の種類ごとの部品、標識
 import * as THREE from "three";
 import type { BuildingType } from "../data/buildings";
-import { Ground, type GameMap, type MapJson } from "../sim/map";
+import { CHUNK, Ground, chunkOf, type ChunkJson, type GameMap, type MapBuilding, type Markings } from "../sim/map";
 
 type V3 = [number, number, number];
 
@@ -12,6 +12,7 @@ export const GROUND_COLORS: Record<number, [number, number, number]> = {
   [Ground.green]: [86, 128, 74],
   [Ground.viaduct]: [92, 84, 76],
   [Ground.dirt]: [150, 124, 92],
+  [Ground.outside]: [26, 28, 32],
 };
 
 export function hash(n: number) {
@@ -107,38 +108,45 @@ export class MeshBuilder {
   }
 }
 
-/** 地面の模様と表示を描いたテクスチャを貼った板 */
-export function buildGround(map: GameMap, anisotropy: number): THREE.Mesh {
+/** 区画の地面の模様と表示を描いたテクスチャを貼った板。道の縁は隣の区画のマスも見て決める */
+export function buildGround(map: GameMap, c: ChunkJson, anisotropy: number): THREE.Mesh {
   const S = 4;
-  const W = map.w * S, H = map.h * S;
+  const W = CHUNK * S;
+  const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
   const canvas = document.createElement("canvas");
   canvas.width = W;
-  canvas.height = H;
+  canvas.height = W;
   const ctx = canvas.getContext("2d")!;
-  const img = ctx.createImageData(W, H);
+  const img = ctx.createImageData(W, W);
   const data = img.data;
-  for (let ty = 0; ty < H; ty++) {
-    const my = Math.floor(ty / S);
-    for (let tx = 0; tx < W; tx++) {
-      const mx = Math.floor(tx / S);
-      const i0 = mx + my * map.w;
-      const g = map.ground[i0];
-      const c = GROUND_COLORS[g] ?? GROUND_COLORS[0];
+  for (let my = 0; my < CHUNK; my++) {
+    for (let mx = 0; mx < CHUNK; mx++) {
+      const gx = x0 + mx, gy = y0 + my;
+      const g = map.groundAt(gx, gy);
+      const col = GROUND_COLORS[g] ?? GROUND_COLORS[0];
       let edge = 0;
       if (g === Ground.road) {
-        const nb = [map.ground[i0 + 1], map.ground[i0 - 1], map.ground[i0 + map.w], map.ground[i0 - map.w]];
-        if (nb.some((v) => v !== undefined && v !== Ground.road)) edge = -8;
+        const nb = [map.groundAt(gx + 1, gy), map.groundAt(gx - 1, gy), map.groundAt(gx, gy + 1), map.groundAt(gx, gy - 1)];
+        if (nb.some((v) => v !== Ground.road && v !== Ground.outside)) edge = -8;
       }
-      const i = (tx + ty * W) * 4;
-      data[i] = Math.max(0, Math.min(255, c[0] + edge));
-      data[i + 1] = Math.max(0, Math.min(255, c[1] + edge));
-      data[i + 2] = Math.max(0, Math.min(255, c[2] + edge));
-      data[i + 3] = 255;
+      const r = Math.max(0, Math.min(255, col[0] + edge));
+      const gg = Math.max(0, Math.min(255, col[1] + edge));
+      const b = Math.max(0, Math.min(255, col[2] + edge));
+      for (let sy = 0; sy < S; sy++) {
+        let i = (mx * S + (my * S + sy) * W) * 4;
+        for (let sx = 0; sx < S; sx++, i += 4) {
+          data[i] = r;
+          data[i + 1] = gg;
+          data[i + 2] = b;
+          data[i + 3] = 255;
+        }
+      }
     }
   }
   ctx.putImageData(img, 0, 0);
   ctx.scale(S, S);
-  paintMarkings(ctx, map.json.markings);
+  ctx.translate(-x0, -y0);
+  paintMarkings(ctx, c.markings);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.magFilter = THREE.LinearFilter;
@@ -146,15 +154,15 @@ export function buildGround(map: GameMap, anisotropy: number): THREE.Mesh {
   tex.generateMipmaps = true;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = anisotropy;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(map.w, map.h), new THREE.MeshBasicMaterial({ map: tex }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(CHUNK, CHUNK), new THREE.MeshBasicMaterial({ map: tex }));
   ground.rotation.x = -Math.PI / 2;
-  ground.position.set(map.w / 2, 0, map.h / 2);
+  ground.position.set(x0 + CHUNK / 2, 0, y0 + CHUNK / 2);
   return ground;
 }
 
 const PAINT = "rgba(232, 232, 226, 0.85)";
 
-function paintMarkings(ctx: CanvasRenderingContext2D, m: MapJson["markings"]) {
+function paintMarkings(ctx: CanvasRenderingContext2D, m: Markings) {
   ctx.lineCap = "butt";
   ctx.strokeStyle = PAINT;
   ctx.lineWidth = 0.22;
@@ -259,7 +267,8 @@ function largest(rects: [number, number, number, number][]) {
   return rects.reduce((a, b) => (b[2] * b[3] > a[2] * a[3] ? b : a));
 }
 
-export function addBuilding(mb: MeshBuilder, b: MapJson["buildings"][number], bi: number) {
+export function addBuilding(mb: MeshBuilder, b: MapBuilding) {
+  const bi = b.id;
   const st = STYLES[b.type] ?? STYLES.office;
   const base = Math.max(3, Math.min(8, b.h * 0.4));
   const h = st.h ? st.h(base) : base;
@@ -395,25 +404,32 @@ export function addBuilding(mb: MeshBuilder, b: MapJson["buildings"][number], bi
   }
 }
 
-/** 地面の「止まれ」。地面のテクスチャでは字が潰れるので、別の板に描いて貼る */
-export function buildRoadText(map: GameMap): THREE.Group {
-  const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 96;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "rgba(240, 240, 234, 0.9)";
-  g.font = `bold 84px "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", sans-serif`;
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillText("止まれ", 128, 52);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
-  const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+let roadTextMat: THREE.MeshBasicMaterial | null = null;
+let roadTextGeo: THREE.PlaneGeometry | null = null;
+
+/** 地面の「止まれ」。地面のテクスチャでは字が潰れるので、別の板に描いて貼る。区画の外の止まれは隣の区画が出す */
+export function buildRoadText(c: ChunkJson): THREE.Group {
+  if (!roadTextMat || !roadTextGeo) {
+    const cv = document.createElement("canvas");
+    cv.width = 256;
+    cv.height = 96;
+    const g = cv.getContext("2d")!;
+    g.fillStyle = "rgba(240, 240, 234, 0.9)";
+    g.font = `bold 84px "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", sans-serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText("止まれ", 128, 52);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    roadTextMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+    roadTextGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  }
   const group = new THREE.Group();
-  for (const s of map.json.markings.stops) {
-    const m = new THREE.Mesh(geo, mat);
+  for (const s of c.markings.stops) {
+    if (chunkOf(s.x) !== c.i || chunkOf(s.y) !== c.j) continue;
+    const m = new THREE.Mesh(roadTextGeo, roadTextMat);
+    m.userData.shared = true;
     // 交差点へ向かう人が読める向き。字の上を交差点の側に向け、進む向きに長く伸ばす
     const width = Math.min(3.4, s.len * 0.62);
     m.scale.set(width, 1, width * 0.9);
@@ -450,11 +466,13 @@ function signTexture(lines: string[], kind: "street" | "station") {
 }
 
 /** 通りの名前の案内標識と駅名標。板はカメラのほうへ傾けて、読めるようにする */
-export function buildSigns(map: GameMap, toCamera: THREE.Vector3): THREE.Group {
+let postMat: THREE.MeshLambertMaterial | null = null;
+
+export function buildSigns(c: ChunkJson, toCamera: THREE.Vector3): THREE.Group {
   const group = new THREE.Group();
-  const postMat = new THREE.MeshLambertMaterial({ color: 0x8a8e94 });
+  postMat ??= new THREE.MeshLambertMaterial({ color: 0x8a8e94 });
   const tilt = Math.atan2(toCamera.y, toCamera.z);
-  for (const s of map.json.signs) {
+  for (const s of c.signs) {
     const { tex, aspect } = signTexture(s.text, s.kind);
     const hgt = s.kind === "street" ? 0.75 * s.text.length + 0.15 : 1.0;
     const wid = hgt * aspect;
@@ -471,4 +489,16 @@ export function buildSigns(map: GameMap, toCamera: THREE.Vector3): THREE.Group {
     }
   }
   return group;
+}
+
+/** 区画を捨てるときに、その区画だけで使っていた形・素材・テクスチャを解放する */
+export function disposeChunk(root: THREE.Object3D, keep: THREE.Material) {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (!o.userData.shared) o.geometry.dispose();
+    const m = o.material as THREE.Material;
+    if (m === keep || m === roadTextMat || m === postMat) return;
+    if (m instanceof THREE.MeshBasicMaterial) m.map?.dispose();
+    m.dispose();
+  });
 }

@@ -1,6 +1,7 @@
 // 画面なしでゲームを回して、例外が出ないか、処理時間、敵どうしの撃ち合い、漁れる物の量を見る。
 // 使い方: npm run smoke
 import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import {
   BARRIER, BUFF_IDS, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
@@ -9,7 +10,7 @@ import { buffsOf } from "../src/sim/buffs";
 import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
-import { GameMap, type MapJson } from "../src/sim/map";
+import { GameMap, type ChunkJson, type MapIndex } from "../src/sim/map";
 import { Rng } from "../src/sim/rng";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
@@ -19,8 +20,11 @@ import type { WeaponType } from "../src/data/weapons";
 
 const baseLoadout = makeRunLoadout(defaultProfile());
 
-const json = JSON.parse(readFileSync("public/maps/akihabara.json", "utf8")) as MapJson;
-const map = new GameMap(json);
+const MAP_DIR = "public/maps/akihabara";
+const map = new GameMap(JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as MapIndex);
+for (const [i, j] of map.index.chunks) {
+  map.addChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
+}
 
 // 漁れる物の量
 {
@@ -46,7 +50,7 @@ const map = new GameMap(json);
     for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
       const b = map.buildingAt(cx + dx, cy + dy);
       if (b) {
-        use = BUILDING_USE[b.type];
+        use = BUILDING_USE[b];
         break;
       }
     }
@@ -460,7 +464,12 @@ const rich = (): Profile => {
     p.pos = { ...q };
     const r = { x: q.x + 12, y: q.y };
     const e = enemyAt(w, r);
-    const before = w.map.solid.slice();
+    const solidNow = () => {
+      const out: number[] = [];
+      for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) out.push(w.map.solidAt(x, y));
+      return out;
+    };
+    const before = solidNow();
     runFor(w, 1, () => ({ ult: true, aim: { x: q.x + 6, y: q.y } }));
     const b = w.barriers[0];
     const cells = b?.cells.length ?? 0;
@@ -488,7 +497,8 @@ const rich = (): Profile => {
     if (b) b.until = w.time;
     step(w, { ...emptyInput(), aim: { ...e.pos } });
     let diff = 0;
-    for (let i = 0; i < before.length; i++) if (before[i] !== w.map.solid[i]) diff++;
+    const after = solidNow();
+    for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) diff++;
     console.log(
       `遮蔽物: 立てたマス ${cells}、1.5秒撃って 敵の体力 ${enemyHp}/200・壁の耐久 ${wallHp}/${BARRIER.hp}、壁の向こうから詰める敵が一番近づいた距離 ${closest.toFixed(1)}m、消えた後に元と違うマス ${diff}`,
     );

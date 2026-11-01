@@ -3,8 +3,8 @@ import {
   BEACON_RADIUS, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
 } from "../sim/data";
 import { weapon, isMoving } from "../sim/combat";
-import { Solid, type GameMap, type Vec } from "../sim/map";
-import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, hash } from "./cityscape";
+import { Solid, chunkKey, type ChunkJson, type GameMap, type Vec } from "../sim/map";
+import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, disposeChunk, hash } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
 import { BARRIER, DT, FRAG, HEAL_SENSE, THERMITE, type ThrowableId } from "../sim/data";
@@ -175,6 +175,10 @@ export class Renderer {
   private healMarkMesh!: THREE.InstancedMesh;
   private overshieldRing!: THREE.Mesh;
 
+  private map: GameMap;
+  private chunkViews = new Map<string, THREE.Group>();
+  private chunkVersion = -1;
+
   constructor(container: HTMLElement, map: GameMap) {
     this.gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     this.gl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -187,9 +191,6 @@ export class Renderer {
     sun.position.set(-30, 60, 40);
     this.scene.add(sun);
 
-    this.scene.add(buildGround(map, this.gl.capabilities.getMaxAnisotropy()));
-    this.scene.add(buildSigns(map, CAM_OFFSET.clone().normalize()));
-    this.scene.add(buildRoadText(map));
     this.buildingMat = new THREE.ShaderMaterial({
       vertexShader: buildingVert,
       fragmentShader: buildingFrag,
@@ -199,7 +200,7 @@ export class Renderer {
         uRadius: { value: 140 },
       },
     });
-    this.buildStructures(map);
+    this.map = map;
 
     this.bullets = instanced(new THREE.BoxGeometry(0.09, 0.09, 1.6), new THREE.MeshBasicMaterial({ color: 0xffffff }), 800);
     this.scene.add(this.bullets);
@@ -466,12 +467,53 @@ export class Renderer {
     this.overshieldRing.position.set(px, 0.9 + Math.sin(this.time * 4) * 0.08, py);
   }
 
-  private buildStructures(map: GameMap) {
+  /** 読み込んである区画と、描いている区画を揃える */
+  private syncChunks() {
+    const map = this.map;
+    if (this.chunkVersion === map.version) return;
+    this.chunkVersion = map.version;
+    for (const [key, g] of this.chunkViews) {
+      if (map.chunks.has(key)) continue;
+      this.scene.remove(g);
+      disposeChunk(g, this.buildingMat);
+      this.chunkViews.delete(key);
+    }
+    const added: ChunkJson[] = [];
+    for (const [key, c] of map.chunks) {
+      if (this.chunkViews.has(key)) continue;
+      const g = new THREE.Group();
+      g.add(buildSigns(c, CAM_OFFSET.clone().normalize()), buildRoadText(c), this.buildStructures(c));
+      this.scene.add(g);
+      this.chunkViews.set(key, g);
+      added.push(c);
+    }
+    // 地面は道の縁を隣の区画のマスで決めるので、隣が来たら描き直す
+    const repaint = new Set<string>();
+    for (const c of added) {
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) repaint.add(chunkKey(c.i + di, c.j + dj));
+    }
+    for (const key of repaint) {
+      const c = map.chunks.get(key);
+      const g = this.chunkViews.get(key);
+      if (!c || !g) continue;
+      const old = g.getObjectByName("ground");
+      if (old) {
+        g.remove(old);
+        disposeChunk(old, this.buildingMat);
+      }
+      const ground = buildGround(map, c, this.gl.capabilities.getMaxAnisotropy());
+      ground.name = "ground";
+      g.add(ground);
+    }
+  }
+
+  private buildStructures(chunk: ChunkJson) {
     const mb = new MeshBuilder();
-    map.json.buildings.forEach((b, bi) => addBuilding(mb, b, bi));
+    for (const b of chunk.buildings) addBuilding(mb, b);
 
     const carColors = [0xf0f0f0, 0x303438, 0xb02828, 0x2858a8, 0x909498, 0xe0c060];
-    map.json.covers.forEach((c, ci) => {
+    chunk.covers.forEach((c) => {
+      const ci = c.id;
       let h = 1.2, cc = 0x888888, roofC: number | null = null;
       if (c.kind === "car") {
         h = 1.5;
@@ -488,8 +530,7 @@ export class Renderer {
       mb.box(c.x + 0.05, c.y + 0.05, c.w - 0.1, c.h - 0.1, 0, h, wc.clone().multiplyScalar(0.85), new THREE.Color(roofC ?? cc));
     });
 
-    const geo = mb.geometry();
-    this.scene.add(new THREE.Mesh(geo, this.buildingMat));
+    return new THREE.Mesh(mb.geometry(), this.buildingMat);
   }
 
   private drawExtracts(w: World) {
@@ -662,7 +703,7 @@ export class Renderer {
   private boxYaw(w: World, l: Loot) {
     const m = w.map;
     const cx = Math.floor(l.pos.x), cy = Math.floor(l.pos.y);
-    const at = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.solid[x + y * m.w] === Solid.building;
+    const at = (x: number, y: number) => m.solidAt(x, y) === Solid.building;
     if (at(cx, cy - 1)) return 0;
     if (at(cx, cy + 1)) return Math.PI;
     if (at(cx - 1, cy)) return -Math.PI / 2;
@@ -775,6 +816,7 @@ export class Renderer {
 
   render(w: World, alpha: number, aim: Vec, frameDt: number, throwPreview: ThrowableId | null = null) {
     this.time += frameDt;
+    this.syncChunks();
     const p = w.player;
     const px = p.prev.x + (p.pos.x - p.prev.x) * alpha;
     const py = p.prev.y + (p.pos.y - p.prev.y) * alpha;
