@@ -1,7 +1,7 @@
 import { angleDiff, findCover, fireEscape, grenadeEscape, scan, seek, turnTo } from "./ai";
 import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
 import {
-  DT, HEAL_MOVE_SPEED, HEALTH_MAX, MOVE_SPEED, PARTNER, PARTNER_COVER, PARTNER_COVER_DIST, PARTNER_FOCUS_TIME, PARTNER_HEAL, PARTNER_LEASH, PARTNER_TACTICS, PARTNER_WIN_MARGIN,
+  DT, HEAL_MOVE_SPEED, HEALTH_MAX, MOVE_SPEED, PARTNER, PARTNER_CATCH_UP, PARTNER_COVER, PARTNER_COVER_DIST, PARTNER_FOCUS_TIME, PARTNER_HEAL, PARTNER_LEASH, PARTNER_TACTICS, PARTNER_WIN_MARGIN,
   PARTNER_RETURN_UNTIL, PARTNER_SLOTS, SHIELD_PER_CELL, SPRINT_SPEED, type HealKind,
 } from "./data";
 import type { Vec } from "./map";
@@ -108,6 +108,31 @@ function chooseHeal(w: World, e: Actor, t: Actor | undefined, d: number): { kind
   return null;
 }
 
+/** プレイヤーの後ろ（進んでいる向きの反対）の、プレイヤーまで歩いて行ける所へ移す。遠い所から試す */
+function warpBehind(w: World, e: Actor) {
+  const p = w.player;
+  const sp = Math.hypot(p.vel.x, p.vel.y);
+  const back = sp > 0.5 ? { x: -p.vel.x / sp, y: -p.vel.y / sp } : { x: -Math.cos(p.facing), y: -Math.sin(p.facing) };
+  const side = e.partner!.index % 2 === 0 ? 1.5 : -1.5;
+  let to: Vec | null = null;
+  for (const d of PARTNER_CATCH_UP.warpBehind) {
+    const q = { x: p.pos.x + back.x * d - back.y * side, y: p.pos.y + back.y * d + back.x * side };
+    if (w.map.walkable(q.x, q.y) && w.map.walkLine(q, p.pos, 0.45)) {
+      to = q;
+      break;
+    }
+  }
+  e.pos = to ?? { ...p.pos };
+  e.prev = { ...e.pos };
+  e.vel = { x: 0, y: 0 };
+  if (e.heal) cancelHeal(w, e);
+  const ai = e.ai!;
+  ai.state = "follow";
+  ai.path = [];
+  ai.pathTarget = null;
+  ai.target = null;
+}
+
 export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   const ai = e.ai!;
   const ps = e.partner!;
@@ -140,6 +165,10 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   }
 
   const dP = dist(e.pos, p.pos);
+  if (dP > PARTNER_CATCH_UP.warp && ai.state !== "fight") {
+    warpBehind(w, e);
+    return;
+  }
   if (ai.state === "return") {
     if (dP < PARTNER_RETURN_UNTIL) ai.state = "follow";
   } else if (dP > PARTNER_LEASH) {
@@ -168,11 +197,16 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
     ps.cover = null;
     ps.phase = "hide";
   }
+  if (e.bike) {
+    const ride = p.bike?.state === "on" && (ai.state === "follow" || ai.state === "return") && !e.heal && !escape;
+    e.bike.state = ride ? "on" : "off";
+  }
   if (!t) ps.hideHealed = false;
 
   const toT = t ? Math.atan2(t.pos.y - e.pos.y, t.pos.x - e.pos.x) : e.facing;
-  const run = SPRINT_SPEED * e.moveMul;
-  const walk = MOVE_SPEED * e.moveMul;
+  const biking = e.bike?.state === "on";
+  const run = biking ? e.bike!.speed : SPRINT_SPEED * e.moveMul;
+  const walk = biking ? e.bike!.speed * 0.6 : MOVE_SPEED * e.moveMul;
   let vel: Vec = { x: 0, y: 0 };
   let trigger = false;
 
@@ -187,7 +221,8 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   } else {
     switch (ai.state) {
       case "return": {
-        vel = seek(w, e, p.pos, run * CATCH_UP_MUL);
+        const chase = Math.min(PARTNER_CATCH_UP.chaseMax, Math.hypot(p.vel.x, p.vel.y) * 1.1);
+        vel = seek(w, e, p.pos, Math.max(run * CATCH_UP_MUL, chase));
         faceMove();
         break;
       }

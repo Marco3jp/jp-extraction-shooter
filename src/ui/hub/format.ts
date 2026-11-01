@@ -45,3 +45,9 @@ export function formatMoveMul(mul: number): string | null {
   if (pct === 0) return null;
   return `移動速度 ${sign(pct)}${Math.abs(pct)}%`;
 }
+
+/** 自転車の性能。持ち込まないときは null */
+export function formatBike(speed: number, mount: number): string | null {
+  if (speed <= 0) return null;
+  return `秒速 ${speed}m・乗るのに ${mount}秒`;
+}

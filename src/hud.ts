@@ -1,6 +1,6 @@
 import {
   EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SHIELD_PER_CELL,
-  BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
+  BIKE_DISMOUNT, BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
   type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
 import { buffsOf, canGiveBuff, GIVE_RANGE } from "./sim/buffs";
@@ -157,6 +157,13 @@ export class Hud {
     pd.title = `${PASSIVES[k.passive].name}：${PASSIVES[k.passive].text}`;
     pd.innerHTML = `<span class="ic">${kitIcon(k.passive, 20)}</span>`;
     items.appendChild(pd);
+    if (w.player.bike) {
+      const d = document.createElement("div");
+      d.className = "item kit bike";
+      d.title = "乗っている間は撃てない。撃とうとするか撃たれると降りる";
+      d.innerHTML = `<span class="key">C</span><span class="name">自転車</span><span class="count"></span><div class="cd"></div>`;
+      items.appendChild(d);
+    }
   }
 
   reset(world: World) {
@@ -389,6 +396,7 @@ export class Hud {
     let promptHtml = "";
     const inExtract = p.alive ? extractAt(w, p.pos) : null;
     const down = p.alive ? downedPartnerNear(w) : null;
+    const board = p.alive && !p.ride ? nearRail(w, p) : null;
     if (down) {
       const t = down.partner!.reviveT;
       promptHtml = t > 0
@@ -398,8 +406,8 @@ export class Hud {
       promptHtml = `脱出中… ${(EXTRACT_TIME - inExtract.progress).toFixed(1)}秒`;
     } else if (inExtract && !loot && inExtract.readyAt === null) {
       promptHtml = "[E] 脱出の迎えを呼ぶ（音で近くの敵が寄ってくる）";
-    } else if (!loot && p.alive && !p.ride && nearRail(w, p)) {
-      promptHtml = "[E] レールに乗る";
+    } else if (!loot && p.alive && !p.ride && board) {
+      promptHtml = board.rail.owner === null ? "[E] 固定レールに乗る（端が集まっている所では、カーソルの向きの線を選ぶ）" : "[E] レールに乗る";
     } else if (loot && !this.panel.open) {
       if (loot.kind === "ground") {
         const s = loot.items[0];
@@ -471,6 +479,14 @@ export class Hud {
   }
 
   private updateKitTile(el: HTMLElement, w: World) {
+    const b = w.player.bike;
+    if (b && el.classList.contains("bike")) {
+      const moving = b.state === "mounting" || b.state === "dismounting";
+      el.classList.toggle("on", b.state === "on");
+      el.querySelector(".count")!.textContent = { off: "乗る", mounting: "乗っている…", on: "乗っている", dismounting: "降りている…" }[b.state];
+      (el.querySelector(".cd") as HTMLElement).style.width = `${moving ? (1 - b.t / (b.state === "mounting" ? b.mount : BIKE_DISMOUNT)) * 100 : 100}%`;
+      return;
+    }
     const k = w.player.kit;
     if (!k || el.classList.contains("passive")) return;
     const ult = el.classList.contains("ult");

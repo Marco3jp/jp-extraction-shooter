@@ -2,6 +2,7 @@ import { DT, HEALS, ITEMS, HEALTH_MAX, SWAP_TIME, THERMITE, type HealKind } from
 import { bagCount, bagRemove } from "./inventory";
 import type { Vec } from "./map";
 import { bottomlessOn, onKill } from "./skills";
+import { startDismount } from "./travel";
 import type { Actor, World } from "./world";
 
 const DEG = Math.PI / 180;
@@ -171,6 +172,7 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
   target.shield -= absorbed;
   target.health -= dmg - absorbed;
   w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: over + absorbed > 0, amount });
+  startDismount(target);
   if (hadShield && target.shield <= 0) {
     w.events.push({ type: "shieldBreak", actor: target.id, pos: { ...target.pos } });
   }
@@ -180,6 +182,7 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
     target.heal = null;
     target.reloadT = 0;
     target.ride = null;
+    if (target.bike) target.bike.state = "off";
     w.events.push({ type: "death", actor: target.id, by: by?.id ?? 0, pos: { ...target.pos } });
     if (by && by !== target) onKill(w, by);
     if (target.team === "enemy") {

@@ -128,6 +128,8 @@ export type Actor = {
   dashCd: number;
   /** 乗っているレール。dir が 1 なら a→b、-1 なら b→a へ進む */
   ride: { rail: number; dir: 1 | -1 } | null;
+  /** 持ち込んだ自転車。mounting・dismounting の間は t 秒残っている。持ち込んでいなければ null */
+  bike: Bike | null;
   /** テルミットの炎で足が遅くなっている残り時間 */
   burnT: number;
   heal: Heal | null;
@@ -184,7 +186,13 @@ export type Fire = {
 /** 遮蔽物のスキルで立てた壁。cells はマスの座標 */
 export type Barrier = { id: number; owner: number; cells: Vec[]; hp: number; until: number };
 
-export type Rail = { id: number; owner: number; a: Vec; b: Vec; until: number };
+/** owner が null なら地図に置いた固定レールで、chunk の区画と一緒に置き、外す */
+export type Rail = { id: number; owner: number | null; chunk: string | null; a: Vec; b: Vec; until: number };
+
+/** ダッシュパッド。angle は軸の向き */
+export type Pad = { id: number; chunk: string; pos: Vec; angle: number };
+
+export type Bike = { speed: number; mount: number; state: "off" | "mounting" | "on" | "dismounting"; t: number };
 
 /** 巻き検知の円。next の時刻に置き直す */
 export type HealMark = { actor: number; pos: Vec; next: number };
@@ -253,6 +261,7 @@ export type World = {
   fires: Fire[];
   barriers: Barrier[];
   rails: Rail[];
+  pads: Pad[];
   healMarks: HealMark[];
   loot: Loot[];
   /** 箱や落ちている物が変わるたびに増える（描画の作り直し用） */
@@ -277,6 +286,8 @@ export type World = {
   memory: Map<string, ChunkMemory>;
   nextGroup: number;
   nextSolo: number;
+  /** 固定レールとダッシュパッドの番号。負の数で数え、nextId は使わない。人の番号が地図の設備の数でずれないように */
+  nextFixed: number;
 };
 
 export function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction: number, pos: Vec, weapons: WeaponDef[], shieldMax: number): Actor {
@@ -294,6 +305,7 @@ export function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], 
     dashT: 0, dashDir: { x: 0, y: 0 }, dashSpeed: 0, dashSteer: false,
     dashCharges: 1, dashMax: 1, dashCd: 0,
     ride: null,
+    bike: null,
     burnT: 0,
     heal: null, alive: true,
     info: 0, seen: false, revealUntil: 0,
@@ -424,6 +436,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   refreshStats(player);
   player.shield = player.shieldMax;
   player.dashCharges = player.dashMax;
+  if (loadout.bike) player.bike = { ...loadout.bike, state: "off", t: 0 };
   for (const ws of player.weapons) ws.mag = ws.def.mag;
   const preferAmmo = loadout.weapons.map((w) => w.ammo);
   const actors: Actor[] = [player];
@@ -435,7 +448,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     map, rng, seed,
     time: 0, tick: 0,
     actors, player,
-    bullets: [], grenades: [], fires: [], barriers: [], rails: [], healMarks: [], loot: [], lootVersion: 1, bag,
+    bullets: [], grenades: [], fires: [], barriers: [], rails: [], pads: [], healMarks: [], loot: [], lootVersion: 1, bag,
     extracts,
     events: [],
     outcome: "playing",
@@ -450,6 +463,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     memory: new Map(),
     nextGroup: 0,
     nextSolo: 0,
+    nextFixed: -1,
   };
   syncSpawns(w);
 
@@ -458,7 +472,10 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     const slot = PARTNER_SLOTS[index % PARTNER_SLOTS.length];
     const ang = player.facing + (slot.angle * Math.PI) / 180;
     const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist) ?? startPos;
-    w.actors.push(makePartner(w.nextId++, index, model, pos));
+    const partner = makePartner(w.nextId++, index, model, pos);
+    // プレイヤーが自転車に乗ると一緒に乗る
+    if (loadout.bike) partner.bike = { ...loadout.bike, state: "off", t: 0 };
+    w.actors.push(partner);
   }
   return w;
 }

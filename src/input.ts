@@ -42,6 +42,7 @@ export class InputState {
         case "KeyQ": this.pending.skill = true; break;
         case "KeyF": this.pending.ult = true; break;
         case "KeyX": this.pending.cancel = true; break;
+        case "KeyC": this.pending.bike = true; break;
         case "KeyE":
           if (!this.onInteract()) this.pending.interact = true;
           break;

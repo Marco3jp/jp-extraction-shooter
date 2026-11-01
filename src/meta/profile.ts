@@ -1,6 +1,6 @@
 import { ATTACHMENTS, SLOT_ORDER, type AttachmentId, type SlotId } from "../data/attachments";
 import { DEATH_LOSES_RUN_LOOT, START_AMMO_MAGS, START_HEALS } from "../data/constants";
-import { ARMORS, BAGS, SHOES, type ArmorId, type BagId, type ShoesId } from "../data/gear";
+import { ARMORS, BAGS, BIKES, SHOES, type ArmorId, type BagId, type BikeId, type ShoesId } from "../data/gear";
 import { ITEMS, MATERIALS, type ItemId, type MaterialId } from "../data/items";
 import { RECIPES, type Recipe } from "../data/recipes";
 import { PARTNER_COUNT, type PartnerModel } from "../data/partners";
@@ -24,7 +24,8 @@ export type Profile = {
   armors: ArmorId[];
   bags: BagId[];
   shoes: ShoesId[];
-  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId } & KitChoice;
+  bikes: BikeId[];
+  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId; bike: BikeId } & KitChoice;
   stats: { runs: number; extractions: number; deaths: number; kills: number };
   /** ランを始める場所。null ならマップの出発地点から */
   camp: Camp | null;
@@ -48,8 +49,9 @@ export function defaultProfile(): Profile {
     armors: ["standard"],
     bags: ["standard"],
     shoes: ["standard"],
+    bikes: ["none"],
     loadout: {
-      weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard",
+      weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard", bike: "none",
       skill: "overshield", passive: "killShield", ult: "barrier",
     },
     stats: { runs: 0, extractions: 0, deaths: 0, kills: 0 },
@@ -79,6 +81,7 @@ export function normalizeProfile(p: Partial<Profile>): Profile {
   if (!(out.loadout.skill in SKILLS)) out.loadout.skill = d.loadout.skill;
   if (!(out.loadout.passive in PASSIVES)) out.loadout.passive = d.loadout.passive;
   if (!(out.loadout.ult in ULTS)) out.loadout.ult = d.loadout.ult;
+  if (!out.bikes.includes(out.loadout.bike)) out.loadout.bike = d.loadout.bike;
   return out;
 }
 
@@ -150,6 +153,12 @@ export function setLoadoutShoes(p: Profile, shoes: ShoesId): boolean {
   return true;
 }
 
+export function setLoadoutBike(p: Profile, bike: BikeId): boolean {
+  if (!p.bikes.includes(bike)) return false;
+  p.loadout.bike = bike;
+  return true;
+}
+
 /** スキルは最初から全部選べる */
 export function setLoadoutSkill(p: Profile, id: SkillId) {
   p.loadout.skill = id;
@@ -177,6 +186,7 @@ export function craftBlocker(p: Profile, r: Recipe): string | null {
   if (o.kind === "armor" && p.armors.includes(o.id)) return "持っている";
   if (o.kind === "bag" && p.bags.includes(o.id)) return "持っている";
   if (o.kind === "shoes" && p.shoes.includes(o.id)) return "持っている";
+  if (o.kind === "bike" && p.bikes.includes(o.id)) return "持っている";
   if (o.kind === "partner") {
     const cur = p.partners[o.index]?.model ?? 0;
     const upgrade = o.index === 0 && o.model === 2;
@@ -203,6 +213,7 @@ export function craft(p: Profile, recipeId: string): boolean {
     case "armor": p.armors.push(o.id); break;
     case "bag": p.bags.push(o.id); break;
     case "shoes": p.shoes.push(o.id); break;
+    case "bike": p.bikes.push(o.id); break;
     case "partner": {
       const x = p.partners[o.index];
       if (x.model === 0) x.enabled = true;
@@ -231,6 +242,8 @@ export type RunLoadout = {
   kit: KitChoice;
   shieldMax: number;
   moveMul: number;
+  /** 持ち込む自転車。持ち込まなければ null */
+  bike: { speed: number; mount: number } | null;
   bagSlots: number;
   startItems: [ItemId, number][];
   /** 連れていくパートナーの番号（0 始まり）と型 */
@@ -249,6 +262,7 @@ export function makeRunLoadout(p: Profile): RunLoadout {
     kit: { skill, passive, ult },
     shieldMax: armor.shield,
     moveMul: armor.moveMul * SHOES[p.loadout.shoes].moveMul,
+    bike: p.loadout.bike === "none" ? null : { speed: BIKES[p.loadout.bike].speed, mount: BIKES[p.loadout.bike].mount },
     bagSlots: BAGS[p.loadout.bag].slots,
     startItems,
     partners: p.partners.flatMap((x, index) => (x.enabled && x.model > 0 ? [{ index, model: x.model as 1 | 2 }] : [])),

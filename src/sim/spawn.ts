@@ -56,6 +56,10 @@ function populate(w: World, c: LoadedChunk) {
   }
   const lootNs: number[] = [];
   w.spawned.set(key, { loot: lootNs });
+  for (const [ax, ay, bx, by] of c.rails) {
+    w.rails.push({ id: w.nextFixed--, owner: null, chunk: key, a: { x: ax, y: ay }, b: { x: bx, y: by }, until: Infinity });
+  }
+  for (const [x, y, angle] of c.pads) w.pads.push({ id: w.nextFixed--, chunk: key, pos: { x, y }, angle });
   if (!free.length) return;
 
   const per10k = free.length / 10000;
@@ -201,7 +205,7 @@ function populate(w: World, c: LoadedChunk) {
   w.lootVersion++;
 }
 
-/** 区画を捨てるときに、その区画の敵（グループの全員）と箱を外し、倒した敵と箱の中身を覚えておく */
+/** 区画を捨てるときに、その区画の敵（グループの全員）・箱・固定レール・ダッシュパッドを外し、倒した敵と箱の中身を覚えておく */
 function depopulate(w: World, key: string) {
   const sp = w.spawned.get(key)!;
   w.spawned.delete(key);
@@ -220,6 +224,8 @@ function depopulate(w: World, key: string) {
     return false;
   });
   for (const n of sp.loot) if (!left.has(n)) mem.loot.set(n, null);
+  w.rails = w.rails.filter((r) => r.chunk !== key);
+  w.pads = w.pads.filter((p) => p.chunk !== key);
   if (w.focus && !w.actors.some((a) => a.id === w.focus!.actor)) w.focus = null;
   w.lootVersion++;
 }

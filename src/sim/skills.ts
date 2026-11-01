@@ -1,6 +1,6 @@
 import { cancelHeal } from "./combat";
 import {
-  BARRIER, DASH, DT, HEAL_SENSE, OVERSHIELD, RAIL, SCAN, SKILLS, SLIDE, ULTS, type StatMod,
+  BARRIER, DASH, DT, FIXED_RAIL, HEAL_SENSE, OVERSHIELD, RAIL, SCAN, SKILLS, SLIDE, ULTS, type StatMod,
 } from "./data";
 import { Solid, type Vec } from "./map";
 import { applyActorModifiers, computeWeapon } from "./stats";
@@ -262,7 +262,7 @@ function layRail(w: World, a: Actor, aim: Vec): Rail | null {
   const len = Math.max(0, t * RAIL.length - 0.6);
   if (len < 2) return null;
   const rail: Rail = {
-    id: w.nextId++, owner: a.id,
+    id: w.nextId++, owner: a.id, chunk: null,
     a: { ...a.pos }, b: { x: a.pos.x + dx * len, y: a.pos.y + dy * len },
     until: w.time + RAIL.duration,
   };
@@ -270,25 +270,43 @@ function layRail(w: World, a: Actor, aim: Vec): Rail | null {
   return rail;
 }
 
-/** 乗り直せる一番近いレール */
-export function nearRail(w: World, a: Actor): Rail | null {
-  let best: Rail | null = null;
-  let bd = RAIL.board;
+export type Boarding = { rail: Rail; dir: 1 | -1 };
+
+/**
+ * 乗れるレールと進む向き。自分で敷いたレールはどこからでも遠いほうの端へ、固定レールは端からだけ反対の端へ乗る。
+ * 交差点のように固定レールの端がいくつも集まっていたら、aim の向きに一番近いものを選ぶ
+ */
+export function nearRail(w: World, a: Actor, aim?: Vec): Boarding | null {
+  let best: Boarding | null = null;
+  let bestScore = Infinity;
+  const aimAng = aim ? Math.atan2(aim.y - a.pos.y, aim.x - a.pos.x) : 0;
+  const consider = (r: Rail, dir: 1 | -1, d: number) => {
+    const from = dir === 1 ? r.a : r.b, to = dir === 1 ? r.b : r.a;
+    const diff = Math.atan2(to.y - from.y, to.x - from.x) - aimAng;
+    const score = aim ? Math.abs(Math.atan2(Math.sin(diff), Math.cos(diff))) : d;
+    if (score < bestScore) {
+      bestScore = score;
+      best = { rail: r, dir };
+    }
+  };
   for (const r of w.rails) {
-    if (r.owner !== a.id) continue;
-    const d = dist(a.pos, closestOnSeg(a.pos, r.a, r.b));
-    if (d <= bd) {
-      bd = d;
-      best = r;
+    if (r.owner === null) {
+      const da = dist(a.pos, r.a), db = dist(a.pos, r.b);
+      if (da <= FIXED_RAIL.board) consider(r, 1, da);
+      if (db <= FIXED_RAIL.board) consider(r, -1, db);
+    } else if (r.owner === a.id) {
+      const d = dist(a.pos, closestOnSeg(a.pos, r.a, r.b));
+      if (d <= RAIL.board) consider(r, dist(a.pos, r.b) >= dist(a.pos, r.a) ? 1 : -1, d);
     }
   }
-  return best;
+  // consider の中で書き換えるので、ここで型を戻す
+  return best as Boarding | null;
 }
 
-/** 遠いほうの端へ向かって乗る */
-export function boardRail(a: Actor, r: Rail) {
-  a.ride = { rail: r.id, dir: dist(a.pos, r.b) >= dist(a.pos, r.a) ? 1 : -1 };
+export function boardRail(a: Actor, b: Boarding) {
+  a.ride = { rail: b.rail.id, dir: b.dir };
   a.dashT = 0;
+  if (a.bike) a.bike.state = "off";
 }
 
 /** レールに乗っている間の速度。降りたら false */
@@ -301,17 +319,20 @@ export function rideStep(w: World, a: Actor): boolean {
     return false;
   }
   const end = ride.dir === 1 ? r.b : r.a;
+  const speed = r.owner === null ? FIXED_RAIL.speed : RAIL.speed;
   const off = dist(a.pos, closestOnSeg(a.pos, r.a, r.b));
   const left = dist(a.pos, end);
+  // 固定レールは端から乗るので、乗った直後は線から少し離れている
+  const offMax = r.owner === null ? FIXED_RAIL.board + 0.5 : 1.2;
   // 人に押されてレールから外れたら降りる
-  if (off > 1.2 || left < RAIL.speed * DT) {
+  if (off > offMax || left < speed * DT) {
     const d = { x: (end.x - a.pos.x) / (left || 1), y: (end.y - a.pos.y) / (left || 1) };
     a.ride = null;
-    a.vel = { x: d.x * Math.min(left / DT, RAIL.speed * 0.3), y: d.y * Math.min(left / DT, RAIL.speed * 0.3) };
+    a.vel = { x: d.x * Math.min(left / DT, speed * 0.3), y: d.y * Math.min(left / DT, speed * 0.3) };
     return false;
   }
   // レールの線へ寄せながら進む
-  const to = closestOnSeg({ x: a.pos.x + (end.x - a.pos.x) * Math.min(1, (RAIL.speed * DT) / left), y: a.pos.y + (end.y - a.pos.y) * Math.min(1, (RAIL.speed * DT) / left) }, r.a, r.b);
+  const to = closestOnSeg({ x: a.pos.x + (end.x - a.pos.x) * Math.min(1, (speed * DT) / left), y: a.pos.y + (end.y - a.pos.y) * Math.min(1, (speed * DT) / left) }, r.a, r.b);
   a.vel = { x: (to.x - a.pos.x) / DT, y: (to.y - a.pos.y) / DT };
   return true;
 }

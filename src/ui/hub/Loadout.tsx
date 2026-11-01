@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
 import { PLAYER_MIN_TTK } from "../../data/constants";
-import { ARMORS, BAGS, SHOES } from "../../data/gear";
+import { ARMORS, BAGS, BIKES, SHOES } from "../../data/gear";
 import {
   PASSIVE_IDS, PASSIVES, SKILL_IDS, SKILLS, ULT_IDS, ULTS, type PassiveId, type SkillId, type UltId,
 } from "../../data/skills";
@@ -14,14 +14,14 @@ import {
   profileWeapon,
   setAttachment,
   setLoadoutArmor,
-  setLoadoutBag, setLoadoutPassive, setLoadoutShoes,
+  setLoadoutBag, setLoadoutBike, setLoadoutPassive, setLoadoutShoes,
   setLoadoutSkill, setLoadoutUlt,
   setLoadoutWeapon,
   setPartnerEnabled,
   type Profile,
 } from "../../meta/profile";
 import { computeWeapon, theoreticalTtk } from "../../sim/stats";
-import { formatMoveMul, rarityColor, toneOf, trimNum, type Tone } from "./format";
+import { formatBike, formatMoveMul, rarityColor, toneOf, trimNum, type Tone } from "./format";
 import { ModList } from "./parts";
 
 type Props = {
@@ -101,6 +101,20 @@ export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
               >
                 <span>{SHOES[s].name}</span>
                 <span class="hub-chip-sub">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">自転車</div>
+          <div class="hub-chips">
+            {profile.bikes.map((b) => (
+              <button
+                class={`hub-chip${profile.loadout.bike === b ? " selected" : ""}`}
+                onClick={() => update((p) => setLoadoutBike(p, b))}
+              >
+                <span>{BIKES[b].name}</span>
+                <span class="hub-chip-sub">{formatBike(BIKES[b].speed, BIKES[b].mount) ?? "持ち込まない"}</span>
               </button>
             ))}
           </div>

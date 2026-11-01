@@ -80,6 +80,10 @@ export type ChunkJson = {
   markings: Markings;
   /** street は通りの名前、station は駅名 */
   signs: { kind: "street" | "station"; x: number; y: number; text: string[] }[];
+  /** 固定レール [始点x, 始点y, 終点x, 終点y]。始点がこの区画にあるもの。終点は隣の区画にあってもよい */
+  rails: [number, number, number, number][];
+  /** ダッシュパッド [x, y, 軸の向き（ラジアン）]。向きの両方へ飛べる */
+  pads: [number, number, number][];
 };
 
 function decode(b64: string): Uint8Array {

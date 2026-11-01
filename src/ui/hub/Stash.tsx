@@ -1,9 +1,9 @@
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOTS } from "../../data/attachments";
-import { ARMORS, BAGS, SHOES } from "../../data/gear";
+import { ARMORS, BAGS, BIKES, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { WEAPON_BASES } from "../../data/weapons";
 import { attachmentsInUse, weaponAttachments, type Profile } from "../../meta/profile";
-import { formatMoney, formatMoveMul, rarityColor } from "./format";
+import { formatMoney, formatBike, formatMoveMul, rarityColor } from "./format";
 import { Icon } from "./parts";
 
 export function Stash({ profile }: { profile: Profile }) {
@@ -95,6 +95,12 @@ export function Stash({ profile }: { profile: Profile }) {
             <li>
               <span>{SHOES[s].name}</span>
               <span class="muted">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
+            </li>
+          ))}
+          {profile.bikes.filter((b) => b !== "none").map((b) => (
+            <li>
+              <span>{BIKES[b].name}</span>
+              <span class="muted">{formatBike(BIKES[b].speed, BIKES[b].mount)}</span>
             </li>
           ))}
         </ul>

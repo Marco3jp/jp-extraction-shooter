@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import {
-  BARRIER, BIN_ITEMS, BUFF_IDS, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
+  BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, FIXED_RAIL, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
 } from "../src/sim/data";
 import { buffsOf } from "../src/sim/buffs";
@@ -16,7 +16,7 @@ import { Rng } from "../src/sim/rng";
 import { syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
-import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutWeapon, type Profile } from "../src/meta/profile";
+import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutBike, setLoadoutWeapon, type Profile } from "../src/meta/profile";
 import { RECIPES } from "../src/data/recipes";
 import type { WeaponType } from "../src/data/weapons";
 
@@ -903,7 +903,237 @@ const rich = (): Profile => {
   }
 }
 
-// 区画を出し入れしながら、マップを左右に往復して走る。12m/s（自転車の速さの見当）
+// 固定レール・ダッシュパッド・自転車
+{
+  const quiet = (w: World) => {
+    for (const a of w.actors) if (a.team === "enemy") a.alive = false;
+  };
+  const near = (a: Vec, b: Vec, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
+
+  // 固定レールの数と、端どうしで乗り継げるつながり
+  {
+    const w = createWorld(map, 5, baseLoadout);
+    const rails = w.rails.filter((r) => r.owner === null);
+    const lens = rails.map((r) => Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y));
+    // 端が乗り場の円の中で重なるレールどうしをつなぐ
+    const parent = rails.map((_, i) => i);
+    const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+    let joints = 0;
+    for (let i = 0; i < rails.length; i++) {
+      for (let j = i + 1; j < rails.length; j++) {
+        const hit = [rails[i].a, rails[i].b].some((e) => [rails[j].a, rails[j].b].some((f) => near(e, f, FIXED_RAIL.board)));
+        if (hit) {
+          joints++;
+          parent[root(i)] = root(j);
+        }
+      }
+    }
+    const groups = new Map<number, number>();
+    rails.forEach((_, i) => groups.set(root(i), (groups.get(root(i)) ?? 0) + lens[i]));
+    const sizes = [...groups.values()].sort((a, b) => b - a);
+    console.log(
+      `固定レール: ${rails.length}本 合計 ${lens.reduce((a, b) => a + b, 0).toFixed(0)}m 最短 ${Math.min(...lens).toFixed(0)}m 最長 ${Math.max(...lens).toFixed(0)}m、`
+        + `乗り継げる組 ${joints}、つながったまとまり ${sizes.length}個（大きい順に ${sizes.slice(0, 4).map((x) => x.toFixed(0)).join("・")}m）、ダッシュパッド ${w.pads.length}個`,
+    );
+  }
+
+  // 1本に乗る：端で E を押すと反対の端まで進む。乗っている間も撃てる
+  {
+    const w = createWorld(map, 5, baseLoadout);
+    quiet(w);
+    const p = w.player;
+    const rails = w.rails.filter((r) => r.owner === null);
+    const r = rails.reduce((a, b) => (Math.hypot(a.b.x - a.a.x, a.b.y - a.a.y) > Math.hypot(b.b.x - b.a.x, b.b.y - b.a.y) ? a : b));
+    const len = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
+    p.pos = { x: r.a.x, y: r.a.y };
+    step(w, { ...emptyInput(), interact: true, aim: { ...r.b } });
+    const boarded = p.ride?.rail === r.id;
+    const t0 = w.time;
+    let shots = 0;
+    for (let i = 0; i < 30 * 30 && p.ride; i++) {
+      step(w, { ...emptyInput(), fire: i % 20 < 3, aim: { x: p.pos.x, y: p.pos.y - 10 } });
+      shots += w.events.filter((e) => e.type === "shot" && e.actor === p.id).length;
+    }
+    const t = w.time - t0;
+    console.log(
+      `固定レールに乗る: 乗れた ${boarded}、${len.toFixed(0)}m を ${t.toFixed(2)}秒（秒速 ${(len / t).toFixed(1)}m・決めた値 ${FIXED_RAIL.speed}m）、降りた所と端のずれ ${Math.hypot(p.pos.x - r.b.x, p.pos.y - r.b.y).toFixed(2)}m、乗っている間に撃った ${shots}発`,
+    );
+  }
+
+  // 乗り継ぎ：出発した所から一番遠くまで行ける乗り継ぎ方を地図の上で探し、カーソルを次のレールの先へ向けて E を押しながらたどる
+  {
+    const w = createWorld(map, 5, baseLoadout);
+    quiet(w);
+    const p = w.player;
+    const rails = w.rails.filter((r) => r.owner === null);
+    type Leg = { rail: number; from: Vec; to: Vec };
+    let best: Leg[] = [];
+    let bestReach = 0;
+    for (const r0 of rails) {
+      for (const [from0, to0] of [[r0.a, r0.b], [r0.b, r0.a]]) {
+        const plan: Leg[] = [{ rail: r0.id, from: from0, to: to0 }];
+        const used = new Set([r0.id]);
+        for (;;) {
+          const at = plan[plan.length - 1].to;
+          let next: Leg | null = null;
+          for (const r of rails) {
+            if (used.has(r.id)) continue;
+            for (const [f, t] of [[r.a, r.b], [r.b, r.a]]) {
+              if (near(f, at, FIXED_RAIL.board) && (!next || Math.hypot(t.x - from0.x, t.y - from0.y) > Math.hypot(next.to.x - from0.x, next.to.y - from0.y))) next = { rail: r.id, from: f, to: t };
+            }
+          }
+          if (!next || Math.hypot(next.to.x - from0.x, next.to.y - from0.y) <= Math.hypot(at.x - from0.x, at.y - from0.y)) break;
+          used.add(next.rail);
+          plan.push(next);
+        }
+        const end = plan[plan.length - 1].to;
+        const reach = Math.hypot(end.x - from0.x, end.y - from0.y);
+        if (reach > bestReach) {
+          bestReach = reach;
+          best = plan;
+        }
+      }
+    }
+    p.pos = { ...best[0].from };
+    const t0 = w.time;
+    let wrong = 0, ridden = 0;
+    for (const leg of best) {
+      step(w, { ...emptyInput(), interact: true, aim: { ...leg.to } });
+      if (!p.ride) break;
+      if (p.ride.rail !== leg.rail) wrong++;
+      while (p.ride) step(w, { ...emptyInput(), aim: { ...leg.to } });
+      ridden++;
+    }
+    const reached = Math.hypot(p.pos.x - best[0].from.x, p.pos.y - best[0].from.y);
+    console.log(`固定レールを乗り継ぐ: ${ridden}/${best.length}本 乗り継いで、出発した所から ${reached.toFixed(0)}m 離れた所まで ${(w.time - t0).toFixed(1)}秒、狙っていないレールに乗った回数 ${wrong}`);
+  }
+
+  // ダッシュパッド：軸に沿って踏むと飛ぶ。横切っても飛ばない
+  {
+    const w = createWorld(map, 5, baseLoadout);
+    quiet(w);
+    const p = w.player;
+    const pad = w.pads.find((x) => {
+      const u = { x: Math.cos(x.angle), y: Math.sin(x.angle) };
+      return map.walkLine({ x: x.pos.x - u.x * 4, y: x.pos.y - u.y * 4 }, { x: x.pos.x + u.x * 32, y: x.pos.y + u.y * 32 }, 0.45);
+    })!;
+    const u = { x: Math.cos(pad.angle), y: Math.sin(pad.angle) };
+    const walk = (from: Vec, dir: Vec, secs: number) => {
+      p.pos = { ...from };
+      p.vel = { x: 0, y: 0 };
+      p.dashT = 0;
+      let launched = false;
+      for (let i = 0; i < secs * 30; i++) {
+        step(w, { ...emptyInput(), move: dir, aim: { x: p.pos.x + dir.x * 5, y: p.pos.y + dir.y * 5 } });
+        if (w.events.some((e) => e.type === "dash")) launched = true;
+      }
+      return { launched, moved: Math.hypot(p.pos.x - from.x, p.pos.y - from.y) };
+    };
+    const along = walk({ x: pad.pos.x - u.x * 2, y: pad.pos.y - u.y * 2 }, u, 1.5);
+    const plain = walk({ x: pad.pos.x - u.x * 2 + u.y * 4, y: pad.pos.y - u.y * 2 - u.x * 4 }, u, 1.5);
+    const across = walk({ x: pad.pos.x + u.y * 2, y: pad.pos.y - u.x * 2 }, { x: -u.y, y: u.x }, 0.8);
+    console.log(
+      `ダッシュパッド: 軸に沿って踏むと 飛んだ ${along.launched}・1.5秒で ${along.moved.toFixed(1)}m（パッドの無い所を歩くと ${plain.moved.toFixed(1)}m）、横切ると 飛んだ ${across.launched}`,
+    );
+  }
+
+  // 自転車：乗るのにかかる時間・速さ・撃とうとすると降りる・撃たれると降りる
+  {
+    const prof = rich();
+    craft(prof, "bike-city");
+    setLoadoutBike(prof, "city");
+    const w = createWorld(map, 5, makeRunLoadout(prof));
+    quiet(w);
+    const p = w.player;
+    const r = w.rails.filter((x) => x.owner === null).reduce((a, b) => (Math.hypot(a.b.x - a.a.x, a.b.y - a.a.y) > Math.hypot(b.b.x - b.a.x, b.b.y - b.a.y) ? a : b));
+    const len = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
+    const u = { x: (r.b.x - r.a.x) / len, y: (r.b.y - r.a.y) / len };
+    p.pos = { x: r.a.x + u.x * 2, y: r.a.y + u.y * 2 };
+    const go = (extra: Partial<Input> = {}) => step(w, { ...emptyInput(), move: u, aim: { x: p.pos.x + u.x * 5, y: p.pos.y + u.y * 5 }, ...extra });
+    go({ bike: true });
+    let mountT = 0;
+    while (p.bike!.state === "mounting") {
+      go();
+      mountT += DT;
+    }
+    const from = { ...p.pos };
+    for (let i = 0; i < 30 * 4; i++) go();
+    const speed4 = Math.hypot(p.vel.x, p.vel.y);
+    const avg = Math.hypot(p.pos.x - from.x, p.pos.y - from.y) / 4;
+    // 左クリックを押し続ける。降りきるまで弾は出ない
+    let shotsOnBike = 0, toOff = 0;
+    while (p.bike!.state !== "off" && toOff < 3) {
+      go({ fire: true });
+      if (p.bike!.state !== "off") shotsOnBike += w.events.filter((e) => e.type === "shot" && e.actor === p.id).length;
+      toOff += DT;
+    }
+    go({ bike: true });
+    while (p.bike!.state === "mounting") go();
+    for (let i = 0; i < 30; i++) go();
+    applyDamage(w, p, 1, undefined, p.pos);
+    const hitState = p.bike!.state;
+    go({ heal: "cell", dash: true });
+    const blocked = !p.heal && p.dashT <= 0;
+    console.log(
+      `自転車（${BIKES.city.name}）: 乗るまで ${mountT.toFixed(2)}秒、4秒後の速さ ${speed4.toFixed(1)}m/s・4秒の平均 ${avg.toFixed(1)}m/s（決めた値 ${BIKES.city.speed}）、`
+        + `撃とうとしてから降りるまで ${toOff.toFixed(2)}秒・降りきる前に出た弾 ${shotsOnBike}発、撃たれた後 ${hitState}、乗ったまま回復とダッシュを止められた ${blocked}`,
+    );
+  }
+
+  // パートナーと動く：自転車で走る・固定レールを乗り継ぐ間に、どれだけ離れるか。80m を超えたら後ろへ移す
+  {
+    const prof = rich();
+    craft(prof, "bike-city");
+    setLoadoutBike(prof, "city");
+    prof.partners[0] = { model: 1, enabled: true };
+    prof.partners[1] = { model: 1, enabled: true };
+    const w = createWorld(map, 6, makeRunLoadout(prof));
+    quiet(w);
+    const p = w.player;
+    const partners = w.actors.filter((a) => a.team === "partner");
+    const rails = w.rails.filter((x) => x.owner === null);
+    const r = rails.reduce((a, b) => (Math.hypot(a.b.x - a.a.x, a.b.y - a.a.y) > Math.hypot(b.b.x - b.a.x, b.b.y - b.a.y) ? a : b));
+    const measure = (label: "自転車" | "固定レール") => {
+      p.pos = { ...r.a };
+      for (const a of partners) {
+        a.pos = { x: r.a.x + 1, y: r.a.y + 1 };
+        a.prev = { ...a.pos };
+        a.vel = { x: 0, y: 0 };
+      }
+      for (let i = 0; i < 30; i++) step(w, { ...emptyInput(), aim: { ...r.b } });
+      let max = 0, warps = 0;
+      const last = partners.map((a) => ({ ...a.pos }));
+      const tick = (input: Input) => {
+        step(w, input);
+        partners.forEach((a, k) => {
+          if (Math.hypot(a.pos.x - last[k].x, a.pos.y - last[k].y) > 30) warps++;
+          last[k] = { ...a.pos };
+          max = Math.max(max, Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y));
+        });
+      };
+      if (label === "自転車") {
+        const u = { x: r.b.x - r.a.x, y: r.b.y - r.a.y };
+        tick({ ...emptyInput(), bike: true, aim: { ...r.b } });
+        for (let i = 0; i < 30 * 15; i++) tick({ ...emptyInput(), move: u, aim: { ...r.b } });
+      } else {
+        tick({ ...emptyInput(), interact: true, aim: { ...r.b } });
+        while (p.ride) tick({ ...emptyInput(), aim: { ...r.b } });
+      }
+      for (let i = 0; i < 30 * 4; i++) tick({ ...emptyInput(), aim: { ...r.b } });
+      const end = partners.map((a) => Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y).toFixed(1)).join("・");
+      console.log(`パートナー2体と${label}: 一番離れた ${max.toFixed(1)}m、後ろへ移した回数 ${warps}、止まって4秒後の距離 ${end}m`);
+    };
+    measure("自転車");
+    measure("固定レール");
+    const a = partners[0];
+    a.pos = { x: p.pos.x + PARTNER_CATCH_UP.warp + 20, y: p.pos.y };
+    step(w, emptyInput());
+    const d = Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y);
+    console.log(`パートナーが ${PARTNER_CATCH_UP.warp + 20}m 離れると: 次のティックで ${d.toFixed(1)}m の所へ移る、そこからプレイヤーまで歩いて行ける ${map.walkLine(a.pos, p.pos, 0.45)}`);
+  }
+}
+
+// 区画を出し入れしながら、マップを左右に往復して走る。12m/s（自転車の速さ）
 const streamRun = async (range: StreamRange, label: string) => {
   const m = new GameMap(mapIndex);
   const streamer = new ChunkStreamer(m, (i, j) => Promise.resolve(readChunk(i, j)), range);

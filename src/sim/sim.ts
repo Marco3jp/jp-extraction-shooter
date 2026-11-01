@@ -5,7 +5,7 @@ import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
-  BEACON_RADIUS, DASH, DT, ENEMY_ACTIVE_RANGE, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
+  BEACON_RADIUS, BIKE_ACCEL, DASH, DT, ENEMY_ACTIVE_RANGE, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
   type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
@@ -13,6 +13,7 @@ import { syncSpawns } from "./spawn";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
 import { bagAdd, sortBag } from "./inventory";
 import { throwGrenade, updateThrowables } from "./throwables";
+import { onBike, padLaunch, startDismount, tickBike, toggleBike } from "./travel";
 import type { Vec } from "./map";
 import type { Actor, Extract, Loot, World } from "./world";
 
@@ -42,13 +43,15 @@ export type Input = {
   /** スキル（Q）とアルティメット（F） */
   skill: boolean;
   ult: boolean;
+  /** 自転車に乗る・降りる（C） */
+  bike: boolean;
   commands: Command[];
 };
 
 export const emptyInput = (): Input => ({
   move: { x: 0, y: 0 }, aim: { x: 0, y: 0 },
   fire: false, sprint: false, reload: false, swap: null, heal: null, cancel: false, interact: false, interactHeld: false,
-  dash: false, throw: null, skill: false, ult: false,
+  dash: false, throw: null, skill: false, ult: false, bike: false,
   commands: [],
 });
 
@@ -207,9 +210,12 @@ function updatePlayer(w: World, input: Input) {
 
   for (const c of input.commands) runCommand(w, c);
 
+  if (input.bike) toggleBike(p);
+  // 自転車の上では撃てず、回復・ダッシュ・投げ物・スキルも使えない。リロードと持ち替えはできる
+  const biking = onBike(p);
   if (input.swap !== null) swapTo(w, p, input.swap);
   if (input.cancel && p.heal) cancelHeal(w, p);
-  if (input.heal) startHeal(w, p, input.heal);
+  if (input.heal && !biking) startHeal(w, p, input.heal);
   if (input.reload) startReload(w, p);
 
   if (input.interact) {
@@ -223,7 +229,7 @@ function updatePlayer(w: World, input: Input) {
       w.events.push({ type: "lootOpened", loot: l.id });
     } else {
       const ex = extractAt(w, p.pos);
-      const rail = p.ride ? null : nearRail(w, p);
+      const rail = p.ride ? null : nearRail(w, p, input.aim);
       if (ex && ex.readyAt === null) callExtract(w, ex, p);
       else if (rail) boardRail(p, rail);
     }
@@ -240,7 +246,7 @@ function updatePlayer(w: World, input: Input) {
 
   const aimAng = Math.atan2(input.aim.y - p.pos.y, input.aim.x - p.pos.x);
   p.facing = aimAng;
-  if (input.throw) throwGrenade(w, p, input.throw, input.aim);
+  if (input.throw && !biking) throwGrenade(w, p, input.throw, input.aim);
 
   let mx = input.move.x, my = input.move.y;
   const ml = Math.hypot(mx, my);
@@ -249,10 +255,10 @@ function updatePlayer(w: World, input: Input) {
     my /= ml;
   }
 
-  if (input.skill) useSkill(w, p, input.aim, { x: mx, y: my });
-  if (input.ult) useUlt(w, p, input.aim);
+  if (input.skill && !biking) useSkill(w, p, input.aim, { x: mx, y: my });
+  if (input.ult && !biking) useUlt(w, p, input.aim);
 
-  if (input.dash && p.dashCharges > 0 && p.dashT <= 0) {
+  if (input.dash && !biking && p.dashCharges > 0 && p.dashT <= 0) {
     p.ride = null;
     // 動いていなければ狙っている向きへ
     p.dashDir = ml > 0 ? { x: mx, y: my } : { x: Math.cos(aimAng), y: Math.sin(aimAng) };
@@ -265,6 +271,7 @@ function updatePlayer(w: World, input: Input) {
     if (p.heal) cancelHeal(w, p);
     w.events.push({ type: "dash", actor: p.id, pos: { ...p.pos }, dir: { ...p.dashDir } });
   }
+  if (!p.ride && ml > 0) padLaunch(w, p, { x: mx, y: my });
   if (p.ride && rideStep(w, p)) {
     p.sprinting = false;
     if (input.fire) pullTrigger(w, p, aimAng);
@@ -289,8 +296,21 @@ function updatePlayer(w: World, input: Input) {
       p.vel.x = p.dashDir.x * MOVE_SPEED;
       p.vel.y = p.dashDir.y * MOVE_SPEED;
     }
-    if (input.fire) pullTrigger(w, p, aimAng);
+    if (input.fire && biking) startDismount(p);
+    if (input.fire && !biking) pullTrigger(w, p, aimAng);
     else releaseTrigger(p);
+    return;
+  }
+  if (biking) {
+    // 乗りかけは止まる。乗っている間はゆっくり速くなり、曲がるのも遅い
+    const b = p.bike!;
+    const speed = b.state === "on" ? b.speed * burnMul(p) : b.state === "dismounting" ? MOVE_SPEED * p.moveMul * burnMul(p) : 0;
+    const k = 1 - Math.exp(-DT * (b.state === "on" ? BIKE_ACCEL : 10));
+    p.vel.x += (mx * speed - p.vel.x) * k;
+    p.vel.y += (my * speed - p.vel.y) * k;
+    p.sprinting = false;
+    if (input.fire) startDismount(p);
+    releaseTrigger(p);
     return;
   }
   const wantSprint = input.sprint && ml > 0 && !p.heal && !input.fire;
@@ -437,6 +457,7 @@ export function step(w: World, input: Input) {
     a.prevFacing = a.facing;
     if (!a.alive) continue;
     tickTimers(w, a);
+    tickBike(a);
     tickSkills(w, a);
     tickFireCd(a);
   }

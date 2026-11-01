@@ -23,6 +23,7 @@ from collections import Counter
 # -I で起動するとスクリプトの置き場所が import の検索先から外れるので、tools/ だけを足す
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buildings import ZONE_OF_LANDUSE, classify, clean_road_name, clean_station_name, is_station  # noqa: E402
+from travel import place_travel  # noqa: E402
 
 # 地面の種類。src/sim/map.ts の Ground と揃える
 LOT, ROAD, SIDEWALK, GREEN, VIADUCT, DIRT = 0, 1, 2, 3, 4, 5
@@ -550,6 +551,7 @@ def main():
     features = place_features(
         cfg, W, H, ground, solid, road_lines, buildings, rects_by_b, nodes, proj,
     )
+    travel = place_travel(W, H, ground, solid, road_lines)
 
     btype = grid(W, H, None)
     for y in range(H):
@@ -560,7 +562,7 @@ def main():
         return [round((lon - ORIGIN_LON) * mx, 2), round((ORIGIN_LAT - lat) * my, 2)]
 
     layout = dict(start=game(*cfg["layout"]["start"]), extracts=[game(*e) for e in cfg["layout"]["extracts"]])
-    sizes = write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features)
+    sizes = write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features, travel)
     print(f"区画 {len(sizes)} 個、1区画 平均 {sum(sizes) / len(sizes) / 1024:.1f}KB・最大 {max(sizes) / 1024:.1f}KB")
     types = Counter(b["type"] for b in out_b)
     m = features["markings"]
@@ -569,6 +571,8 @@ def main():
     print("建物の種類:", dict(types.most_common()))
     print(f"横断歩道 {len(m['crosswalks'])} 停止線 {len(m['stops'])} 中央線 {len(m['lines'])} マンホール {len(m['manholes'])}"
           f" 標識 {len(features['signs'])} 町名 {[a['name'] for a in features['areas']]}")
+    rl = [math.hypot(r[2] - r[0], r[3] - r[1]) for r in travel["rails"]]
+    print(f"固定レール {len(rl)} 本（合計 {sum(rl):.0f}m・最長 {max(rl, default=0):.0f}m）ダッシュパッド {len(travel['pads'])} 個")
 
     if preview:
         colors = {LOT: (150, 150, 140), ROAD: (60, 60, 65), SIDEWALK: (185, 180, 170),
@@ -603,6 +607,10 @@ OVERVIEW_TILE = 512
 # 全体マップの色。地面は src/render/cityscape.ts の GROUND_COLORS を暗くしたもの
 OVERVIEW_BUILDING = (150, 144, 132)
 OVERVIEW_COVER = (190, 170, 110)
+# 固定レールとその端（乗り場）、ダッシュパッド。src/render/renderer.ts の色と揃える
+OVERVIEW_RAIL = (90, 200, 230)
+OVERVIEW_RAIL_END = (200, 245, 255)
+OVERVIEW_PAD = (240, 200, 60)
 OVERVIEW_GROUND = {
     LOT: (138, 136, 128), ROAD: (58, 60, 66), SIDEWALK: (170, 165, 155),
     GREEN: (86, 128, 74), VIADUCT: (92, 84, 76), DIRT: (150, 124, 92),
@@ -620,8 +628,24 @@ def png_rgba(w, h, rows):
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
-def write_overview(out_dir, OX, OY, W, H, ground, solid):
-    """全体マップ用の絵を、ゲームの座標で OVERVIEW_TILE 四方ずつに区切って書き出す。マップの外は透明にする"""
+def write_overview(out_dir, OX, OY, W, H, ground, solid, travel):
+    """全体マップ用の絵を、ゲームの座標で OVERVIEW_TILE 四方ずつに区切って書き出す。マップの外は透明にする。
+    固定レールとダッシュパッドも描く"""
+    marks = {}
+    for ax, ay, bx, by in travel["rails"]:
+        n = int(math.hypot(bx - ax, by - ay) / 0.5) + 1
+        for k in range(n + 1):
+            x, y = ax + (bx - ax) * k / n, ay + (by - ay) * k / n
+            for dx, dy in ((0, 0), (1, 0), (0, 1)):
+                marks[(int(x) + dx, int(y) + dy)] = OVERVIEW_RAIL
+        for x, y in ((ax, ay), (bx, by)):
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    marks[(int(x) + dx, int(y) + dy)] = OVERVIEW_RAIL_END
+    for x, y, _ in travel["pads"]:
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                marks.setdefault((int(x) + dx, int(y) + dy), OVERVIEW_PAD)
     d = os.path.join(out_dir, "overview")
     os.makedirs(d, exist_ok=True)
     for f in os.listdir(d):
@@ -643,7 +667,9 @@ def write_overview(out_dir, OX, OY, W, H, ground, solid):
                         row += b"\x00\x00\x00\x00"
                         continue
                     any_cell = True
-                    if solid[y][x] == BUILDING:
+                    if (x, y) in marks:
+                        c = marks[(x, y)]
+                    elif solid[y][x] == BUILDING:
                         c = OVERVIEW_BUILDING
                     elif solid[y][x] == COVER:
                         c = OVERVIEW_COVER
@@ -659,7 +685,7 @@ def write_overview(out_dir, OX, OY, W, H, ground, solid):
     return tiles
 
 
-def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features):
+def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features, travel):
     """CHUNK 四方の区画ごとに、gzip した JSON を書き出す。建物・遮蔽物・標識は、左上の角や位置がある区画にまるごと入れる。
     変換の格子の座標に OX・OY を足して、ゲームの座標で書く"""
     out_dir = cfg["out"]
@@ -682,6 +708,8 @@ def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b,
         manholes=[[rnd(x + OX), rnd(y + OY)] for x, y in m["manholes"]],
     )
     signs = [dict(sg, x=rnd(sg["x"] + OX), y=rnd(sg["y"] + OY)) for sg in features["signs"]]
+    rails = [[rnd(ax + OX), rnd(ay + OY), rnd(bx + OX), rnd(by + OY)] for ax, ay, bx, by in travel["rails"]]
+    pads = [[rnd(x + OX), rnd(y + OY), round(a, 3)] for x, y, a in travel["pads"]]
     areas = [dict(a, x=rnd(a["x"] + OX), y=rnd(a["y"] + OY)) for a in features["areas"]]
 
     def owner(x, y):
@@ -733,6 +761,8 @@ def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b,
                     manholes=[p for p in marks["manholes"] if near(p[0], p[1], i, j)],
                 ),
                 signs=[sg for sg in signs if owner(sg["x"], sg["y"]) == (i, j)],
+                rails=[r for r in rails if owner(r[0], r[1]) == (i, j)],
+                pads=[p for p in pads if owner(p[0], p[1]) == (i, j)],
             )
             raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
             data = gzip.compress(raw, 9, mtime=0)
@@ -752,7 +782,7 @@ def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b,
         layout=layout,
         areas=areas,
         chunks=chunks,
-        overview=dict(tile=OVERVIEW_TILE, tiles=write_overview(out_dir, OX, OY, W, H, ground, solid)),
+        overview=dict(tile=OVERVIEW_TILE, tiles=write_overview(out_dir, OX, OY, W, H, ground, solid, travel)),
     )
     with open(os.path.join(out_dir, "index.json"), "w") as f:
         json.dump(index, f, ensure_ascii=False, separators=(",", ":"))

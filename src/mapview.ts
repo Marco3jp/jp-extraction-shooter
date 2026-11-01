@@ -125,7 +125,9 @@ export class MapView {
     }
     ctx.strokeStyle = "rgba(128, 232, 255, 0.8)";
     ctx.lineWidth = 2;
+    // 固定レールは全体マップの絵に描いてある
     for (const r of w.rails) {
+      if (r.owner === null) continue;
       const a = toS(r.a), b = toS(r.b);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);

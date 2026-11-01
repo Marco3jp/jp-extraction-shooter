@@ -7,7 +7,7 @@ import { CHUNK, Solid, chunkKey, type GameMap, type LoadedChunk, type Vec } from
 import { MeshBuilder, addBuilding, buildRoadText, buildSigns, disposeChunk, hash, makeGroundTile, paintGround, type GroundTile } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
-import { BARRIER, DT, FRAG, HEAL_SENSE, THERMITE, type ThrowableId } from "../sim/data";
+import { BARRIER, DASH_PAD, DT, FIXED_RAIL, FRAG, HEAL_SENSE, THERMITE, type ThrowableId } from "../sim/data";
 import type { Actor, Extract, GameEvent, Loot, World } from "../sim/world";
 
 const CAM_OFFSET = new THREE.Vector3(0, 56, 36);
@@ -28,6 +28,69 @@ export function extractColor(e: Extract): number {
 export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff, partner: 0x9ae8ff };
 /** パートナーの体の色。プレイヤー（勢力0の色）に寄せて、少し明るくする */
 export const PARTNER_COLOR = 0x8fd8ff;
+/** 固定レールと、その端（乗り場）。tools/osm_to_map.py の OVERVIEW_RAIL と揃える */
+const FIXED_RAIL_COLOR = 0x5ac8e6;
+const FIXED_RAIL_END_COLOR = 0xc8f5ff;
+/** 固定レールとダッシュパッドを描く、プレイヤーからの距離（m）。画面に映るのは 70m × 60m ほど */
+const TRAVEL_DRAW_RANGE = 70;
+const RAIL_DRAW_MAX = 64;
+const PAD_DRAW_MAX = 96;
+
+function closestOnSegment(p: Vec, a: Vec, b: Vec): Vec {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+  return { x: a.x + dx * t, y: a.y + dy * t };
+}
+
+/** 自転車。前が +x */
+function makeBike() {
+  const g = new THREE.Group();
+  const tire = new THREE.MeshLambertMaterial({ color: 0x1c1c1c });
+  const frame = new THREE.MeshLambertMaterial({ color: 0xd04838 });
+  for (const x of [-0.55, 0.55]) {
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.33, 0.05, 6, 20), tire);
+    wheel.position.set(x, 0.33, 0);
+    g.add(wheel);
+  }
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.07, 0.07), frame);
+  bar.position.set(0, 0.62, 0);
+  bar.rotation.z = -0.15;
+  g.add(bar);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.6), frame);
+  handle.position.set(0.5, 0.85, 0);
+  g.add(handle);
+  g.visible = false;
+  return g;
+}
+
+/** ダッシュパッドの絵。黄色い板に、軸の両向きの矢印 */
+function padTexture() {
+  const c = document.createElement("canvas");
+  c.width = 112;
+  c.height = 64;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "rgba(40, 34, 10, 0.75)";
+  g.fillRect(0, 0, 112, 64);
+  g.strokeStyle = "#f0c83c";
+  g.lineWidth = 4;
+  g.strokeRect(2, 2, 108, 60);
+  g.fillStyle = "#f0c83c";
+  for (const dir of [-1, 1]) {
+    for (const off of [14, 30]) {
+      const x = 56 + dir * off;
+      g.beginPath();
+      g.moveTo(x + dir * 10, 32);
+      g.lineTo(x - dir * 4, 14);
+      g.lineTo(x - dir * 4, 50);
+      g.closePath();
+      g.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 type BoxState = "closed" | "opened" | "empty";
 type BoxColors = { body: number; lid: number; accent: number };
@@ -119,6 +182,9 @@ type ActorView = {
   healRing: THREE.Mesh;
   healMat: THREE.MeshBasicMaterial;
   reloadArc: THREE.Mesh;
+  /** 自転車。進んでいる向きへ回す */
+  bike: THREE.Group | null;
+  bikeHeading: number;
 };
 
 type Particle = { p: THREE.Vector3; v: THREE.Vector3; life: number; max: number; color: THREE.Color; size: number };
@@ -178,6 +244,10 @@ export class Renderer {
   private barrierMesh!: THREE.InstancedMesh;
   private barrierGhost!: THREE.InstancedMesh;
   private railMesh!: THREE.InstancedMesh;
+  /** 固定レールの端（乗り場）の輪と柱、ダッシュパッド */
+  private railEndRing!: THREE.InstancedMesh;
+  private railEndPost!: THREE.InstancedMesh;
+  private padMesh!: THREE.InstancedMesh;
   private healMarkMesh!: THREE.InstancedMesh;
   private overshieldRing!: THREE.Mesh;
 
@@ -314,8 +384,23 @@ export class Renderer {
     this.barrierGhost.renderOrder = 18;
     this.railMesh = instanced(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0x80e8ff, transparent: true, opacity: 0.55, depthWrite: false }),
-      16,
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false }),
+      RAIL_DRAW_MAX,
+    );
+    this.railEndRing = instanced(
+      new THREE.RingGeometry(FIXED_RAIL.board - 0.25, FIXED_RAIL.board, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: FIXED_RAIL_END_COLOR, transparent: true, opacity: 0.6, depthWrite: false }),
+      RAIL_DRAW_MAX * 2,
+    );
+    this.railEndPost = instanced(
+      new THREE.CylinderGeometry(0.12, 0.12, 2.8, 8).translate(0, 1.4, 0),
+      new THREE.MeshLambertMaterial({ color: FIXED_RAIL_END_COLOR }),
+      RAIL_DRAW_MAX * 2,
+    );
+    this.padMesh = instanced(
+      new THREE.PlaneGeometry(DASH_PAD.radius * 2.2, DASH_PAD.radius * 1.25).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: padTexture(), transparent: true, depthWrite: false }),
+      PAD_DRAW_MAX,
     );
     // 巻き検知の円は壁越しにも見せるので、建物に隠れないようにする
     this.healMarkMesh = instanced(
@@ -328,7 +413,7 @@ export class Renderer {
       new THREE.TorusGeometry(0.62, 0.05, 6, 32).rotateX(Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xffd040, transparent: true, opacity: 0.8 }),
     );
-    this.scene.add(this.barrierMesh, this.barrierGhost, this.railMesh, this.healMarkMesh, this.overshieldRing);
+    this.scene.add(this.barrierMesh, this.barrierGhost, this.railMesh, this.railEndRing, this.railEndPost, this.padMesh, this.healMarkMesh, this.overshieldRing);
 
     this.resize();
   }
@@ -442,20 +527,54 @@ export class Renderer {
     this.barrierMesh.instanceMatrix.needsUpdate = true;
     if (this.barrierMesh.instanceColor) this.barrierMesh.instanceColor.needsUpdate = true;
 
-    let ri = 0;
+    // 固定レールは近くのものだけ描く。端（乗り場）には輪と柱を立てる
+    let ri = 0, ei = 0;
+    const near = (v: Vec, r: number) => Math.abs(v.x - px) < r && Math.abs(v.y - py) < r;
     for (const r of w.rails) {
-      if (ri >= 16) break;
+      if (ri >= RAIL_DRAW_MAX) break;
+      const fixed = r.owner === null;
+      if (fixed && !near(closestOnSegment({ x: px, y: py }, r.a, r.b), TRAVEL_DRAW_RANGE)) continue;
       const len = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
-      this.dummy.position.set((r.a.x + r.b.x) / 2, 0.08, (r.a.y + r.b.y) / 2);
+      this.dummy.position.set((r.a.x + r.b.x) / 2, fixed ? 0.06 : 0.08, (r.a.y + r.b.y) / 2);
       this.dummy.rotation.set(0, -Math.atan2(r.b.y - r.a.y, r.b.x - r.a.x), 0);
-      this.dummy.scale.set(len, 1, 0.5);
+      this.dummy.scale.set(len, 1, fixed ? 0.7 : 0.5);
       this.dummy.updateMatrix();
       this.railMesh.setMatrixAt(ri, this.dummy.matrix);
+      this.railMesh.setColorAt(ri, col.setHex(fixed ? FIXED_RAIL_COLOR : 0x80e8ff));
       ri++;
+      if (!fixed) continue;
+      for (const e of [r.a, r.b]) {
+        if (!near(e, TRAVEL_DRAW_RANGE)) continue;
+        this.dummy.position.set(e.x, 0.07, e.y);
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(1);
+        this.dummy.updateMatrix();
+        this.railEndRing.setMatrixAt(ei, this.dummy.matrix);
+        this.railEndPost.setMatrixAt(ei, this.dummy.matrix);
+        ei++;
+      }
     }
     this.dummy.scale.setScalar(1);
     this.railMesh.count = ri;
     this.railMesh.instanceMatrix.needsUpdate = true;
+    if (this.railMesh.instanceColor) this.railMesh.instanceColor.needsUpdate = true;
+    this.railEndRing.count = ei;
+    this.railEndPost.count = ei;
+    this.railEndRing.instanceMatrix.needsUpdate = true;
+    this.railEndPost.instanceMatrix.needsUpdate = true;
+
+    let pi = 0;
+    for (const pad of w.pads) {
+      if (pi >= PAD_DRAW_MAX) break;
+      if (!near(pad.pos, TRAVEL_DRAW_RANGE)) continue;
+      this.dummy.position.set(pad.pos.x, 0.05, pad.pos.y);
+      this.dummy.rotation.set(0, -pad.angle, 0);
+      this.dummy.updateMatrix();
+      this.padMesh.setMatrixAt(pi, this.dummy.matrix);
+      pi++;
+    }
+    this.padMesh.count = pi;
+    this.padMesh.instanceMatrix.needsUpdate = true;
 
     let hi = 0;
     for (const m of w.healMarks) {
@@ -654,7 +773,9 @@ export class Renderer {
     group.add(reloadArc);
 
     this.scene.add(group);
-    return { group, body, bodyMat, ghost, ghostMat, typeRing, typeRingMat, healRing, healMat, reloadArc };
+    const bike = a.bike ? makeBike() : null;
+    if (bike) group.add(bike);
+    return { group, body, bodyMat, ghost, ghostMat, typeRing, typeRingMat, healRing, healMat, reloadArc, bike, bikeHeading: a.facing };
   }
 
   private spawnParticles(at: Vec, y: number, n: number, color: number, speed: number, size = 0.12, life = 0.5) {
@@ -891,6 +1012,16 @@ export class Renderer {
       v.body.visible = isPlayer || a.seen;
       v.body.rotation.z = a.alive ? 0 : Math.PI / 2;
       v.body.position.y = a.alive ? 0.78 : 0.4;
+      if (v.bike) {
+        // 乗りかけ・降りかけの間は横に置いた自転車を見せ、乗っている間は体を少し上げる
+        const st = a.alive ? a.bike?.state ?? "off" : "off";
+        v.bike.visible = st !== "off";
+        const sp = Math.hypot(a.vel.x, a.vel.y);
+        if (sp > 0.8) v.bikeHeading = Math.atan2(a.vel.y, a.vel.x);
+        v.bike.rotation.y = -v.bikeHeading;
+        v.bike.position.set(st === "on" ? 0 : Math.cos(v.bikeHeading + Math.PI / 2) * 0.7, 0, st === "on" ? 0 : Math.sin(v.bikeHeading + Math.PI / 2) * 0.7);
+        if (st === "on") v.body.position.y += 0.35;
+      }
       const info = isPlayer ? 0 : a.info;
       const typeColor = a.kind === "player" ? 0xffffff : TYPE_COLORS[a.kind];
       v.ghost.visible = a.alive && !isPlayer && (info >= 1 || a.seen);

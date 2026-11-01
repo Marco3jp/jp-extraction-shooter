@@ -60,6 +60,9 @@ export const PARTNER_SLOTS = [
 /** これ以上プレイヤーから離れたら、撃ち合いをやめて戻る。戻り始めたら returnUntil まで寄る */
 export const PARTNER_LEASH = 25;
 export const PARTNER_RETURN_UNTIL = 10;
+/** 戻るときは、プレイヤーの速さの 1.1 倍まで速く走る（固定レール・ダッシュパッドで離されたとき）。上限は chaseMax m/s。
+ * 撃ち合っていないときに warp m より離れたら、プレイヤーの後ろの見えにくい所へ移す */
+export const PARTNER_CATCH_UP = { chaseMax: 24, warp: 80, warpBehind: [34, 28, 22, 16, 10] };
 /** プレイヤーが撃った相手を、パートナーが優先して狙い続ける秒数 */
 export const PARTNER_FOCUS_TIME = 3;
 /** プレイヤーが回復している間、敵の方へこれだけ出て撃ち返す */
