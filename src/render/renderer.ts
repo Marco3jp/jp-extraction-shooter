@@ -20,7 +20,9 @@ export function extractColor(e: Extract): number {
   return e.ready ? EXTRACT_COLORS.ready : e.readyAt !== null ? EXTRACT_COLORS.called : EXTRACT_COLORS.idle;
 }
 
-export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff };
+export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff, partner: 0x9ae8ff };
+/** パートナーの体の色。プレイヤー（勢力0の色）に寄せて、少し明るくする */
+export const PARTNER_COLOR = 0x8fd8ff;
 
 type BoxState = "closed" | "opened" | "empty";
 type BoxColors = { body: number; lid: number; accent: number };
@@ -239,6 +241,7 @@ export class Renderer {
       throwable: instanced(new THREE.SphereGeometry(0.24, 12, 8).translate(0, 0.24, 0), glow, 600),
       material: instanced(new THREE.OctahedronGeometry(0.3).translate(0, 0.32, 0), glow, 600),
       money: instanced(new THREE.BoxGeometry(0.55, 0.12, 0.32).translate(0, 0.06, 0), glow, 600),
+      buff: instanced(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 6).translate(0, 0.3, 0), glow, 100),
     };
     this.scene.add(this.bins, this.deathboxes, ...Object.values(this.groundItems));
     this.lootHighlight = new THREE.Mesh(
@@ -556,7 +559,7 @@ export class Renderer {
 
   private makeActorView(a: Actor): ActorView {
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshLambertMaterial({ color: factionDef(a.faction).color });
+    const bodyMat = new THREE.MeshLambertMaterial({ color: a.team === "partner" ? PARTNER_COLOR : factionDef(a.faction).color });
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.42, 1.55, 16), bodyMat);
     body.position.y = 0.78;
     group.add(body);
@@ -671,7 +674,7 @@ export class Renderer {
     if (this.lootVersion === w.lootVersion) return;
     this.lootVersion = w.lootVersion;
     const col = new THREE.Color();
-    const counts = { bins: 0, deathboxes: 0, ammo: 0, heal: 0, throwable: 0, material: 0, money: 0, glows: 0 };
+    const counts = { bins: 0, deathboxes: 0, ammo: 0, heal: 0, throwable: 0, material: 0, money: 0, buff: 0, glows: 0 };
     let markers = 0;
     const put = (mesh: THREE.InstancedMesh, i: number, m: THREE.Matrix4, c: number) => {
       mesh.setMatrixAt(i, m);
@@ -808,20 +811,20 @@ export class Renderer {
         v = this.makeActorView(a);
         this.actorViews.set(a.id, v);
       }
-      const isPlayer = a.team === "player";
+      // プレイヤーとパートナーは、倒れても横になって残る
+      const isPlayer = a.team !== "enemy";
       if (!a.alive && !isPlayer) {
         v.group.visible = false;
         continue;
       }
+      v.group.visible = true;
       const ax = a.prev.x + (a.pos.x - a.prev.x) * alpha;
       const ay = a.prev.y + (a.pos.y - a.prev.y) * alpha;
       v.group.position.set(ax, 0, ay);
       v.body.rotation.y = -a.facing;
       v.body.visible = isPlayer || a.seen;
-      if (!a.alive) {
-        v.body.rotation.z = Math.PI / 2;
-        v.body.position.y = 0.4;
-      }
+      v.body.rotation.z = a.alive ? 0 : Math.PI / 2;
+      v.body.position.y = a.alive ? 0.78 : 0.4;
       const info = isPlayer ? 0 : a.info;
       const typeColor = a.kind === "player" ? 0xffffff : TYPE_COLORS[a.kind];
       v.ghost.visible = a.alive && !isPlayer && (info >= 1 || a.seen);

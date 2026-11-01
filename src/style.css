@@ -745,3 +745,128 @@ body {
     transform: scale(1);
   }
 }
+
+#partners {
+  position: absolute;
+  left: 16px;
+  bottom: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+}
+#partners .prow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-shadow: 0 1px 2px #000;
+}
+#partners .prow.down {
+  opacity: 0.55;
+}
+#partners .pn,
+.ptag .pn {
+  min-width: 16px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #8fd8ff;
+  color: #10161c;
+  font-weight: 700;
+  text-align: center;
+}
+#partners .pbars {
+  flex: 1;
+}
+#partners .pst {
+  min-width: 56px;
+  color: var(--muted);
+}
+.ptag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 70px;
+  margin-left: -35px;
+  font-size: 11px;
+  text-align: center;
+  text-shadow: 0 1px 2px #000;
+}
+.ptag .pn {
+  display: inline-block;
+}
+.ptag .pst {
+  color: #ffb070;
+  font-weight: 700;
+}
+.tbar.revive div {
+  background: #8fd8ff;
+}
+
+#inventory h3 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+}
+#inventory h3 small {
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+}
+#inventory .buffs,
+#inventory .pbuffs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+#inventory .pbuffs {
+  align-items: center;
+  margin-top: 6px;
+}
+#inventory .pbuffs .pn {
+  margin-right: 4px;
+  font-size: 12px;
+  color: #8fd8ff;
+}
+#inventory .buff {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 3px;
+  border-left: 3px solid var(--c);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+#inventory .buff .ic {
+  display: flex;
+}
+#inventory .spare {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+#inventory .spare .ct {
+  font-size: 12px;
+  color: var(--muted);
+}
+#inventory .spare .gives {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+#inventory .give {
+  padding: 3px 8px;
+  border: 1px solid #8fd8ff;
+  background: transparent;
+  color: #8fd8ff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+#inventory .give:hover:not(:disabled) {
+  background: rgba(143, 216, 255, 0.14);
+}
+#inventory .give:disabled {
+  opacity: 0.3;
+  cursor: default;
+}

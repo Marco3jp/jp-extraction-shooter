@@ -9,3 +9,5 @@ export * from "../data/recipes";
 export * from "../data/throwables";
 export * from "../data/buildings";
 export * from "../data/skills";
+export * from "../data/buffs";
+export * from "../data/partners";

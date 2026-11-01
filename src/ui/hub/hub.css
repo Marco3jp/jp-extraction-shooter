@@ -242,6 +242,13 @@
 .hub-chip:hover {
   border-color: rgba(80, 255, 154, 0.5);
 }
+.hub-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.hub-chip:disabled:hover {
+  border-color: var(--hub-line);
+}
 .hub-chip.selected {
   border-color: var(--accent, #50ff9a);
   background: rgba(80, 255, 154, 0.1);

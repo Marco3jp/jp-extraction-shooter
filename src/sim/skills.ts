@@ -24,6 +24,8 @@ export function refreshStats(a: Actor) {
   a.shieldMax = Math.round(s.shieldMax);
   a.shield = Math.min(a.shield, a.shieldMax);
   a.killShield = s.killShield;
+  a.skillCdMul = s.skillCd;
+  a.dashCdMul = s.dashCd;
   const dashMax = Math.max(1, Math.round(s.dashCharges));
   if (dashMax !== a.dashMax) {
     a.dashCharges = Math.min(a.dashCharges + Math.max(0, dashMax - a.dashMax), dashMax);
@@ -32,7 +34,7 @@ export function refreshStats(a: Actor) {
   a.build.weapons.forEach((b, i) => {
     const ws = a.weapons[i];
     if (!ws) return;
-    ws.def = computeWeapon(b.type, b.attachments, mods);
+    ws.def = computeWeapon(b.type, b.attachments, mods, a.build!.minTtk);
     ws.mag = Math.min(ws.mag, ws.def.mag);
   });
 }
@@ -75,7 +77,7 @@ export function useSkill(w: World, a: Actor, aim: Vec, move: Vec): boolean {
       break;
     }
   }
-  k.skillCd = def.cooldown;
+  k.skillCd = def.cooldown * a.skillCdMul;
   k.skillT = def.duration;
   w.events.push({ type: "skill", actor: a.id, pos: { ...a.pos }, id: k.skill });
   return true;
@@ -132,7 +134,7 @@ export function tickSkills(w: World, a: Actor) {
     a.dashCd -= DT;
     if (a.dashCd <= 0) {
       a.dashCharges++;
-      a.dashCd = a.dashCharges < a.dashMax ? DASH.cooldown + a.dashCd : 0;
+      a.dashCd = a.dashCharges < a.dashMax ? DASH.cooldown * a.dashCdMul + a.dashCd : 0;
     }
   }
   if (a.overshieldT > 0) {

@@ -1,7 +1,7 @@
 import { BEACON_RADIUS, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
 import { Solid, type GameMap, type Vec } from "./sim/map";
 import type { Actor, Extract, World } from "./sim/world";
-import { TYPE_COLORS, extractColor } from "./render/renderer";
+import { PARTNER_COLOR, TYPE_COLORS, extractColor } from "./render/renderer";
 import { GROUND_COLORS } from "./render/cityscape";
 
 export type Ping = { pos: Vec; t: number };
@@ -143,6 +143,19 @@ export class MapView {
       ctx.fill();
       ctx.strokeStyle = "rgba(0,0,0,0.6)";
       ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // パートナーは味方なので常に出す。倒れていたら色を落とす
+    for (const a of w.actors) {
+      if (a.team !== "partner") continue;
+      const s = toS(a.pos);
+      ctx.fillStyle = a.alive ? hex(PARTNER_COLOR) : "#5a6a74";
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, mini ? 3.5 : 4, 0, Math.PI * 2);
+      ctx.fill();
       ctx.stroke();
     }
 

@@ -6,6 +6,7 @@ import {
   PASSIVE_IDS, PASSIVES, SKILL_IDS, SKILLS, ULT_IDS, ULTS, type PassiveId, type SkillId, type UltId,
 } from "../../data/skills";
 import { kitIcon } from "../icons";
+import { PARTNER, PARTNER_MODELS } from "../../data/partners";
 import { WEAPON_BASES, type WeaponDef, type WeaponStat, type WeaponType } from "../../data/weapons";
 import {
   attachmentsFree,
@@ -16,6 +17,7 @@ import {
   setLoadoutBag, setLoadoutPassive, setLoadoutShoes,
   setLoadoutSkill, setLoadoutUlt,
   setLoadoutWeapon,
+  setPartnerEnabled,
   type Profile,
 } from "../../meta/profile";
 import { computeWeapon, theoreticalTtk } from "../../sim/stats";
@@ -102,6 +104,36 @@ export function Loadout({ profile, mapName, onChange, onDeploy }: Props) {
               </button>
             ))}
           </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">パートナー</div>
+          <div class="hub-chips">
+            {profile.partners.map((x, i) =>
+              x.model === 0 ? (
+                <button class="hub-chip" disabled>
+                  <span>{i + 1}</span>
+                  <span class="hub-chip-sub">まだ作っていない</span>
+                </button>
+              ) : (
+                <button
+                  class={`hub-chip${x.enabled ? " selected" : ""}`}
+                  onClick={() => update((p) => setPartnerEnabled(p, i, !x.enabled))}
+                >
+                  <span>
+                    {i + 1} {PARTNER_MODELS[x.model].name}
+                  </span>
+                  <span class="hub-chip-sub">
+                    シールド {PARTNER_MODELS[x.model].shield}・{x.enabled ? "連れていく" : "連れていかない"}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>
+          <p class="hub-role">
+            {profile.partners.some((x) => x.model > 0)
+              ? `${WEAPON_BASES[PARTNER.weapon.type].name}を持ち、左後ろ・右後ろに付いて戦う。倒れたら近くで E を長押しして起こす`
+              : "クラフトの画面で作れる"}
+          </p>
         </div>
         <div class="hub-field">
           <div class="hub-field-label">出発地点</div>

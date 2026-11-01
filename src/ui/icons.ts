@@ -27,6 +27,11 @@ function gearPath(cx: number, cy: number, teeth: number, ro: number, ri: number)
 
 const BRASS = "#d9a845";
 
+/** 強化パーツは六角形の部品の枠に、効き目の印を入れる */
+function module(color: string, inner: string) {
+  return `<path d="M10 1.2L17.8 5.6V14.4L10 18.8L2.2 14.4V5.6Z" fill="#20252c" stroke="${color}" stroke-width="1.4" stroke-linejoin="round"/>${inner}`;
+}
+
 const BODIES: Record<ItemId, string> = {
   rifle: round(4.6, 2, 4.2, 16, 5.5, BRASS, "#c8743c") + round(11.2, 2, 4.2, 16, 5.5, BRASS, "#c8743c"),
   smg: round(2.4, 6.5, 4, 11, 3.2, BRASS, "#b9c0c8") + round(8, 6.5, 4, 11, 3.2, BRASS, "#b9c0c8") + round(13.6, 6.5, 4, 11, 3.2, BRASS, "#b9c0c8"),
@@ -79,6 +84,13 @@ const BODIES: Record<ItemId, string> = {
     `<path d="${gearPath(10, 10, 8, 9.2, 6.8)}" fill="#cbb8ea" stroke="#5c2f9c" stroke-width="0.8" stroke-linejoin="round"/>` +
     `<circle cx="10" cy="10" r="4" fill="#b060ff" stroke="#5c2f9c" stroke-width="0.8"/>` +
     `<circle cx="8.7" cy="8.7" r="1.2" fill="#f2e6ff"/>`,
+  shieldCore: module("#4aa0ff", `<path d="M10 5L14 6.6V9.8C14 12.4 12.3 14.2 10 15.2C7.7 14.2 6 12.4 6 9.8V6.6Z" fill="#4aa0ff"/>`),
+  magKit: module(BRASS, `<rect x="6.6" y="5.6" width="2.6" height="8.8" rx="0.6" fill="${BRASS}"/><rect x="10.8" y="5.6" width="2.6" height="8.8" rx="0.6" fill="${BRASS}"/>`),
+  stabilizer: module("#c9cdd2", `<circle cx="10" cy="10" r="3.6" fill="none" stroke="#c9cdd2" stroke-width="1.3"/><path d="M10 4.6V7.4M10 12.6V15.4M4.6 10H7.4M12.6 10H15.4" stroke="#c9cdd2" stroke-width="1.3" stroke-linecap="round"/>`),
+  quickLoader: module("#ffd040", `<path d="M13.6 8A4 4 0 1 0 14 11.4" fill="none" stroke="#ffd040" stroke-width="1.6" stroke-linecap="round"/><path d="M14.6 5.2V8.6H11.2" fill="none" stroke="#ffd040" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`),
+  lightFrame: module("#50e070", `<path d="M6 6.4L9.6 10L6 13.6M10.4 6.4L14 10L10.4 13.6" fill="none" stroke="#50e070" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>`),
+  coolingUnit: module("#9ad8ff", `<path d="M10 5V15M5.7 7.5L14.3 12.5M5.7 12.5L14.3 7.5" stroke="#9ad8ff" stroke-width="1.5" stroke-linecap="round"/>`),
+  spareBattery: module("#50e070", `<rect x="6" y="6.6" width="7.4" height="6.8" rx="0.8" fill="none" stroke="#50e070" stroke-width="1.4"/><rect x="13.4" y="8.6" width="1.4" height="2.8" fill="#50e070"/><rect x="7.4" y="8" width="2.4" height="4" fill="#50e070"/>`),
   money:
     `<circle cx="10" cy="10" r="8.6" fill="#ffc030" stroke="#9a6e0c" stroke-width="1.1"/>` +
     `<circle cx="10" cy="10" r="6.5" fill="none" stroke="#e0a020" stroke-width="0.8"/>` +

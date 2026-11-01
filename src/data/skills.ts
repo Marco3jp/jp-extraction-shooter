@@ -2,8 +2,8 @@ import type { Modifier } from "./attachments";
 import { DASH } from "./constants";
 import type { WeaponStat } from "./weapons";
 
-/** 武器のほかに修正をかけられる項目 */
-export type ActorStat = "moveMul" | "shieldMax" | "dashCharges" | "killShield";
+/** 武器のほかに修正をかけられる項目。skillCd・dashCd はクールダウンに掛ける倍率で、基礎値は 1 */
+export type ActorStat = "moveMul" | "shieldMax" | "dashCharges" | "killShield" | "skillCd" | "dashCd";
 export type ActorStats = Record<ActorStat, number>;
 export type StatMod = Modifier<WeaponStat | ActorStat>;
 

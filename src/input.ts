@@ -100,6 +100,7 @@ export class InputState {
     input.aim = aim;
     input.fire = this.fire && !mouseBlocked;
     input.sprint = k.has("ShiftLeft") || k.has("ShiftRight");
+    input.interactHeld = k.has("KeyE");
     if (input.swap === -1) input.swap = currentWeapon === 0 ? 1 : 0;
     return input;
   }

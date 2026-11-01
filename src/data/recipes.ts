@@ -9,9 +9,11 @@ export type RecipeOutput =
   | { kind: "weapon"; id: WeaponType }
   | { kind: "armor"; id: ArmorId }
   | { kind: "bag"; id: BagId }
-  | { kind: "shoes"; id: ShoesId };
+  | { kind: "shoes"; id: ShoesId }
+  /** index 番目のパートナーを model の型にする。作っていなければ作る */
+  | { kind: "partner"; index: number; model: 1 | 2 };
 
-export type RecipeCategory = "material" | "attachment" | "weapon" | "gear";
+export type RecipeCategory = "material" | "attachment" | "weapon" | "gear" | "partner";
 
 export type Recipe = {
   id: string;
@@ -52,4 +54,9 @@ export const RECIPES: Recipe[] = [
   { id: "bag-large", category: "gear", output: { kind: "bag", id: "large" }, money: 2500, materials: { circuit: 6, precision: 2 } },
   { id: "shoes-light", category: "gear", output: { kind: "shoes", id: "light" }, money: 600, materials: { junk: 8, circuit: 1 } },
   { id: "shoes-racing", category: "gear", output: { kind: "shoes", id: "racing" }, money: 2000, materials: { circuit: 4, precision: 1 } },
+
+  // 2体目は1体目を作ってから、1体目の改良は2体目を作ってから
+  { id: "ptn-1", category: "partner", output: { kind: "partner", index: 0, model: 1 }, money: 1200, materials: { junk: 12, circuit: 3 } },
+  { id: "ptn-2", category: "partner", output: { kind: "partner", index: 1, model: 2 }, money: 3500, materials: { circuit: 6, precision: 2 } },
+  { id: "ptn-1-up", category: "partner", output: { kind: "partner", index: 0, model: 2 }, money: 2000, materials: { circuit: 4, precision: 1 } },
 ];

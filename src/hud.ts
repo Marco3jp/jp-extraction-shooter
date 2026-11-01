@@ -1,9 +1,11 @@
 import {
   EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SHIELD_PER_CELL,
-  DASH, OVERSHIELD, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef, type HealKind, type ItemId, type ThrowableId,
+  BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
+  type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
+import { buffsOf, canGiveBuff, GIVE_RANGE } from "./sim/buffs";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
-import { extractAt, nearestLoot, type Command } from "./sim/sim";
+import { downedPartnerNear, extractAt, nearestLoot, type Command } from "./sim/sim";
 import { nearRail } from "./sim/skills";
 import type { Actor, Extract, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
@@ -53,12 +55,19 @@ function countText(s: Stack) {
   return s.item === "money" ? yen(s.count) : `×${s.count}`;
 }
 
+const partnerName = (a: Actor) => `パートナー${a.partner!.index + 1}`;
+
+function buffChip(id: BuffId) {
+  return `<span class="buff" style="--c:${hex(RARITY_COLORS[BUFFS[id].rarity])}" title="${BUFFS[id].text}"><span class="ic">${itemIcon(id, 18)}</span>${BUFFS[id].name}</span>`;
+}
+
 function lootTitle(l: Loot) {
   return l.kind === "deathbox" ? "倒した相手の持ち物" : l.kind === "bin" ? "物資箱" : "落ちている物";
 }
 
 export class Hud {
   private tags: HTMLDivElement[] = [];
+  private partnerTags: HTMLDivElement[] = [];
   private toastTimer = 0;
   private hitTimer = 0;
   private dmgTimer = 0;
@@ -107,6 +116,11 @@ export class Hud {
     inv.addEventListener("mousedown", (e) => e.stopPropagation());
     inv.addEventListener("contextmenu", (e) => e.preventDefault());
     inv.addEventListener("click", (e) => {
+      const give = (e.target as HTMLElement).closest<HTMLElement>("[data-give]");
+      if (give) {
+        this.onCommand({ type: "giveBuff", buff: give.dataset.give as BuffId, partner: Number(give.dataset.partner) });
+        return;
+      }
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-take],[data-takeall]");
       if (!el || this.panel.lootId === null) return;
       if (el.dataset.takeall !== undefined) this.onCommand({ type: "takeAll", loot: this.panel.lootId });
@@ -231,6 +245,10 @@ export class Hud {
           const victim = byId.get(ev.actor);
           const killer = byId.get(ev.by);
           if (!victim || victim === p) break;
+          if (victim.team === "partner") {
+            this.feedPush(`${partnerName(victim)}が倒れた（近くで E 長押しで起こす）`, w);
+            break;
+          }
           const near = Math.hypot(ev.pos.x - p.pos.x, ev.pos.y - p.pos.y) < 80;
           if (killer === p) this.feedPush(`${factionDef(victim.faction).name}を倒した`, w);
           else if (near || victim.seen) this.feedPush(`${killer ? factionDef(killer.faction).name : "?"} が ${factionDef(victim.faction).name} を倒した`, w);
@@ -343,7 +361,7 @@ export class Hud {
         el.classList.toggle("empty", !ready);
         const charges = p.dashMax > 1 ? ` ×${p.dashCharges}` : "";
         el.querySelector(".count")!.textContent = ready && (full || p.dashMax > 1) ? `使える${charges}` : `${p.dashCd.toFixed(1)}`;
-        (el.querySelector(".cd") as HTMLElement).style.width = `${full ? 100 : (1 - p.dashCd / DASH.cooldown) * 100}%`;
+        (el.querySelector(".cd") as HTMLElement).style.width = `${full ? 100 : (1 - p.dashCd / (DASH.cooldown * p.dashCdMul)) * 100}%`;
         continue;
       }
       const n = bagCount(w.bag, el.dataset.item as ItemId);
@@ -365,11 +383,19 @@ export class Hud {
       heal.style.display = "none";
     }
 
+    this.updatePartners(w);
+
     const prompt = $("#prompt");
     const loot = p.alive ? nearestLoot(w) : null;
     let promptHtml = "";
     const inExtract = p.alive ? extractAt(w, p.pos) : null;
-    if (inExtract && inExtract.progress > 0) {
+    const down = p.alive ? downedPartnerNear(w) : null;
+    if (down) {
+      const t = down.partner!.reviveT;
+      promptHtml = t > 0
+        ? `${partnerName(down)}を起こしている… ${(PARTNER_REVIVE.time - t).toFixed(1)}秒`
+        : `[E 長押し] ${partnerName(down)}を起こす（${PARTNER_REVIVE.time}秒。撃たれたら押し直し）`;
+    } else if (inExtract && inExtract.progress > 0) {
       promptHtml = `脱出中… ${(EXTRACT_TIME - inExtract.progress).toFixed(1)}秒`;
     } else if (inExtract && !loot && inExtract.readyAt === null) {
       promptHtml = "[E] 脱出の迎えを呼ぶ（音で近くの敵が寄ってくる）";
@@ -451,7 +477,7 @@ export class Hud {
     const ult = el.classList.contains("ult");
     const cd = ult ? k.ultCd : k.skillCd;
     const active = ult ? k.ultT : k.skillT;
-    const max = ult ? ULTS[k.ult].cooldown : SKILLS[k.skill].cooldown;
+    const max = ult ? ULTS[k.ult].cooldown : SKILLS[k.skill].cooldown * w.player.skillCdMul;
     el.classList.toggle("on", active > 0);
     el.classList.toggle("empty", cd > 0 && active <= 0);
     el.querySelector(".count")!.textContent = active > 0 ? `残り${active.toFixed(1)}` : cd > 0 ? `${Math.ceil(cd)}` : "使える";
@@ -476,7 +502,11 @@ export class Hud {
       return;
     }
     inv.style.display = "flex";
-    const sig = JSON.stringify([w.bag, loot?.items, loot?.id, w.player.weapons.map((x) => x.mag)]);
+    const near = w.actors.filter((a) => a.team === "partner" && Math.hypot(a.pos.x - w.player.pos.x, a.pos.y - w.player.pos.y) <= GIVE_RANGE);
+    const sig = JSON.stringify([
+      w.bag, loot?.items, loot?.id, w.player.weapons.map((x) => x.mag),
+      buffsOf(w.player), w.spareBuffs, near.map((a) => [a.id, buffsOf(a)]),
+    ]);
     if (sig === this.panelSig) return;
     this.panelSig = sig;
 
@@ -505,8 +535,57 @@ export class Hud {
         <h2>持ち物 <small>${bagUsed(w.bag)}/${w.bag.slots.length}枠　${yen(w.bag.money)}</small></h2>
         <div class="weapons">${weapons}</div>
         <div class="grid">${slots}</div>
+        ${this.buffsHtml(w, near)}
         <p class="hint">クリックで取る・右クリックで捨てる・Tab / Esc で閉じる</p>
       </section>`;
+  }
+
+  /** 効いている強化パーツと、予備の受け渡し。予備はパートナーの近くにいるときだけ渡せる */
+  private buffsHtml(w: World, near: Actor[]) {
+    const mine = buffsOf(w.player);
+    let html = `<h3>強化パーツ <small>このランの間だけ効く</small></h3>`;
+    html += `<div class="buffs">${mine.length ? mine.map(buffChip).join("") : `<span class="hint">まだない</span>`}</div>`;
+    const partners = w.actors.filter((a) => a.team === "partner");
+    if (w.spareBuffs.length) {
+      const rows = [...new Set(w.spareBuffs)].map((id) => {
+        const n = w.spareBuffs.filter((x) => x === id).length;
+        const buttons = partners.map((a) => {
+          const ok = near.includes(a) && canGiveBuff(a, id);
+          return `<button class="give" data-give="${id}" data-partner="${a.id}"${ok ? "" : " disabled"}>${a.partner!.index + 1}に渡す</button>`;
+        }).join("");
+        return `<div class="spare">${buffChip(id)}${n > 1 ? `<span class="ct">×${n}</span>` : ""}<span class="gives">${buttons}</span></div>`;
+      }).join("");
+      html += `<h3>予備 <small>${near.length ? "近くのパートナーに渡せる" : `パートナーの ${GIVE_RANGE}m 以内で渡せる`}</small></h3>${rows}`;
+    }
+    for (const a of near) {
+      const list = buffsOf(a);
+      html += `<div class="pbuffs"><span class="pn">${partnerName(a)}</span>${list.length ? list.map(buffChip).join("") : `<span class="hint">なし</span>`}</div>`;
+    }
+    return html;
+  }
+
+  /** 左下のパートナーのシールドとヘルス */
+  private updatePartners(w: World) {
+    const el = $("#partners");
+    const partners = w.actors.filter((a) => a.team === "partner");
+    el.style.display = partners.length ? "flex" : "none";
+    while (el.children.length < partners.length) {
+      const row = document.createElement("div");
+      row.className = "prow";
+      row.innerHTML = `<span class="pn"></span><div class="pbars"><div class="tbar shield"><div></div></div><div class="tbar health"><div></div></div></div><span class="pst"></span>`;
+      el.appendChild(row);
+    }
+    while (el.children.length > partners.length) el.lastElementChild!.remove();
+    partners.forEach((a, i) => {
+      const row = el.children[i] as HTMLElement;
+      row.classList.toggle("down", !a.alive);
+      row.querySelector(".pn")!.textContent = `${a.partner!.index + 1}`;
+      const bars = row.querySelectorAll<HTMLElement>(".tbar div");
+      bars[0].style.width = `${(a.shield / a.shieldMax) * 100}%`;
+      bars[1].style.width = `${(a.health / HEALTH_MAX) * 100}%`;
+      const st = !a.alive ? "倒れている" : a.heal ? "回復中" : a.reloadT > 0 ? "リロード" : a.ai?.state === "return" ? "戻っている" : "";
+      row.querySelector(".pst")!.textContent = st;
+    });
   }
 
   private updateTags(w: World, r: Renderer) {
@@ -534,6 +613,31 @@ export class Hud {
       (tag.querySelector(".fac") as HTMLElement).textContent = a.seen ? factionDef(a.faction).name : "";
     }
     for (let i = n; i < this.tags.length; i++) this.tags[i].style.display = "none";
+
+    // パートナーの頭の上に番号を出す。倒れていたら起こしている進み具合も出す
+    let m = 0;
+    for (const a of w.actors) {
+      if (a.team !== "partner") continue;
+      const s = r.worldToScreen(a.pos.x, a.pos.y, a.alive ? 2.4 : 1.2);
+      if (!s.visible) continue;
+      let tag = this.partnerTags[m];
+      if (!tag) {
+        tag = document.createElement("div");
+        tag.className = "ptag";
+        tag.innerHTML = `<div class="pn"></div><div class="pst"></div><div class="tbar revive"><div></div></div>`;
+        layer.appendChild(tag);
+        this.partnerTags.push(tag);
+      }
+      m++;
+      tag.style.display = "block";
+      tag.style.transform = `translate(${s.x}px, ${s.y}px)`;
+      tag.querySelector(".pn")!.textContent = `${a.partner!.index + 1}`;
+      tag.querySelector(".pst")!.textContent = a.alive ? "" : "倒れている";
+      const rv = tag.querySelector<HTMLElement>(".tbar.revive")!;
+      rv.style.display = !a.alive && a.partner!.reviveT > 0 ? "block" : "none";
+      (rv.firstElementChild as HTMLElement).style.width = `${(a.partner!.reviveT / PARTNER_REVIVE.time) * 100}%`;
+    }
+    for (let i = m; i < this.partnerTags.length; i++) this.partnerTags[i].style.display = "none";
   }
 
   private makeTag(layer: HTMLElement) {

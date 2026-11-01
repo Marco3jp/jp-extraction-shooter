@@ -1,4 +1,4 @@
-import { DT, ENEMY, ENEMY_SPEED, FRAG, HEAL_MOVE_SPEED, ROAM_CHANCE, ROAM_DISTANCE, THERMITE } from "./data";
+import { DT, ENEMY, ENEMY_SPEED, FRAG, HEAL_MOVE_SPEED, PARTNER, ROAM_CHANCE, ROAM_DISTANCE, THERMITE } from "./data";
 import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
 import type { PathAvoid, Vec } from "./map";
 import type { Actor, World } from "./world";
@@ -13,21 +13,21 @@ export function hostile(a: Actor, b: Actor) {
   return a.faction !== b.faction;
 }
 
-function angleDiff(a: number, b: number) {
+export function angleDiff(a: number, b: number) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
 
-function turnTo(e: Actor, target: number, rate: number) {
+export function turnTo(e: Actor, target: number, rate: number) {
   const d = angleDiff(e.facing, target);
   const step = rate * DT;
   e.facing += Math.abs(d) <= step ? d : Math.sign(d) * step;
 }
 
-function spec(e: Actor) {
-  return ENEMY[e.kind as keyof typeof ENEMY];
+export function spec(e: Actor) {
+  return e.kind === "partner" ? PARTNER : ENEMY[e.kind as keyof typeof ENEMY];
 }
 
 /** at に敵がいると知らせる。source が分かっていれば狙う相手にする */
@@ -35,6 +35,15 @@ export function alert(w: World, e: Actor, at: Vec, source: Actor | null, spread 
   const ai = e.ai;
   if (!ai || !e.alive) return;
   if (source && !hostile(e, source)) return;
+  // パートナーは狙う相手を覚えるだけで、動き方はプレイヤーに合わせて partner.ts で決める
+  if (e.team === "partner") {
+    if (!ai.canSee) {
+      ai.lastSeen = { ...at };
+      ai.lastSeenT = w.time;
+      if (source && ai.target === null) ai.target = source.id;
+    }
+    return;
+  }
   if (!ai.canSee) {
     ai.lastSeen = { ...at };
     ai.lastSeenT = w.time;
@@ -75,7 +84,7 @@ function fireAvoid(w: World): PathAvoid | undefined {
 }
 
 /** target へ向かう速度ベクトルを返す。経路は必要なときだけ引き直す */
-function seek(w: World, e: Actor, target: Vec, speed: number): Vec {
+export function seek(w: World, e: Actor, target: Vec, speed: number): Vec {
   const ai = e.ai!;
   ai.repathT -= DT;
   const moved = !ai.pathTarget || dist(ai.pathTarget, target) > 2.5;
@@ -87,7 +96,7 @@ function seek(w: World, e: Actor, target: Vec, speed: number): Vec {
       ai.path = w.map.findPath(e.pos, target, 12000, avoid) ?? [];
     }
     ai.pathTarget = { ...target };
-    ai.repathT = ai.state === "patrol" ? 4 : 0.8 + w.rng.next() * 0.4;
+    ai.repathT = ai.state === "patrol" ? 4 : ai.state === "follow" ? 0.4 : 0.8 + w.rng.next() * 0.4;
   }
   while (ai.path.length && dist(ai.path[0], e.pos) < 0.6) ai.path.shift();
   const next = ai.path[0];
@@ -123,7 +132,7 @@ function roamTo(w: World, e: Actor): boolean {
   return false;
 }
 
-function findCover(w: World, e: Actor, threat: Vec): Vec | null {
+export function findCover(w: World, e: Actor, threat: Vec): Vec | null {
   let best: Vec | null = null;
   let bestScore = -Infinity;
   for (let i = 0; i < 28; i++) {
@@ -173,7 +182,7 @@ function bestEscape(w: World, e: Actor, cands: Vec[], t: Actor | undefined): Vec
 }
 
 /** 見えているグレネードの爆発に巻き込まれない場所。巻き込まれないなら null */
-function grenadeEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
+export function grenadeEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
   const reach = FRAG.radius + e.radius + 0.6;
   for (const g of w.grenades) {
     if (g.kind !== "frag" || g.t < g.flight + spec(e).reaction + GRENADE_NOTICE_DELAY) continue;
@@ -200,7 +209,7 @@ function grenadeEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
 }
 
 /** 炎の中にいれば、炎の外の場所。留まると決めたときと、炎の外にいるときは null */
-function fireEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
+export function fireEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
   const reach = THERMITE.width / 2 + e.radius;
   for (const f of w.fires) {
     const c = closestOnSeg(e.pos, f.a, f.b);
@@ -225,7 +234,7 @@ function fireEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
 }
 
 /** 見えている敵対相手のうち、一番近いものを探す */
-function scan(w: World, e: Actor): Actor | null {
+export function scan(w: World, e: Actor): Actor | null {
   const ai = e.ai!;
   const sight = spec(e).sight;
   let best: Actor | null = null;

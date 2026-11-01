@@ -3,6 +3,7 @@ import { ARMORS, BAGS, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { RECIPES, type Recipe, type RecipeCategory } from "../../data/recipes";
 import { WEAPON_BASES } from "../../data/weapons";
+import { PARTNER, PARTNER_MODELS } from "../../data/partners";
 import { attachmentsInUse, craft, craftBlocker, type Profile } from "../../meta/profile";
 import { formatMoney, formatMoveMul, rarityColor } from "./format";
 import { Icon, ModList } from "./parts";
@@ -12,6 +13,7 @@ const CATEGORIES: { id: RecipeCategory; name: string }[] = [
   { id: "attachment", name: "アタッチメント" },
   { id: "weapon", name: "武器" },
   { id: "gear", name: "防具・カバン・靴" },
+  { id: "partner", name: "パートナー" },
 ];
 
 type Props = { profile: Profile; onChange: (next: Profile) => void };
@@ -96,6 +98,12 @@ function Output({ recipe }: { recipe: Recipe }) {
       return <span class="hub-recipe-name">{BAGS[o.id].name}</span>;
     case "shoes":
       return <span class="hub-recipe-name">{SHOES[o.id].name}</span>;
+    case "partner":
+      return (
+        <span class="hub-recipe-name">
+          {o.index === 0 && o.model === 2 ? `パートナー1を${PARTNER_MODELS[2].name}にする` : `パートナー${o.index + 1}（${PARTNER_MODELS[o.model].name}）`}
+        </span>
+      );
   }
 }
 
@@ -121,6 +129,14 @@ function Detail({ recipe }: { recipe: Recipe }) {
       return <p class="hub-recipe-text">{BAGS[o.id].slots}枠</p>;
     case "shoes":
       return <p class="hub-recipe-text">{formatMoveMul(SHOES[o.id].moveMul)}</p>;
+    case "partner":
+      return (
+        <p class="hub-recipe-text">
+          {o.index === 0 && o.model === 2
+            ? `シールド ${PARTNER_MODELS[1].shield} → ${PARTNER_MODELS[2].shield}`
+            : `シールド ${PARTNER_MODELS[o.model].shield}・${WEAPON_BASES[PARTNER.weapon.type].name}`}
+        </p>
+      );
   }
 }
 

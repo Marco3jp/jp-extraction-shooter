@@ -2,8 +2,8 @@ import {
   BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, BUILDING_USE, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
   GROUND_ITEMS, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, ROAMING_GROUP_RATE, SOLO_COUNT,
   LOOT_TILT, SOLO_FACTION_BASE, SOLO_KINDS,
-  DASH, ENEMY_MIN_TTK, PASSIVES, ULT_START_READY, ULTS,
-  type ActorStats, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
+  DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
+  type ActorStats, type BuffId, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
   type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
 } from "./data";
 import type { RunLoadout } from "../meta/profile";
@@ -17,7 +17,8 @@ export type WeaponState = { def: WeaponDef; mag: number };
 
 export type Heal = { kind: HealKind; t: number; total: number; items: number };
 
-export type AiState = "patrol" | "engage" | "retreat" | "push";
+/** patrol〜push は敵、follow〜return はパートナー */
+export type AiState = "patrol" | "engage" | "retreat" | "push" | "follow" | "fight" | "heal" | "return";
 
 export type Ai = {
   state: AiState;
@@ -53,6 +54,18 @@ export type ActorMod = { source: string; mods: StatMod[]; until: number | null }
 export type ActorBuild = {
   weapons: { type: WeaponType; attachments: AttachmentId[] }[];
   stats: ActorStats;
+  /** 武器の理論 TTK の下限 */
+  minTtk: number;
+};
+
+/** パートナーだけが持つ状態。index は 0 始まりの番号で、付く位置（左後ろ・右後ろ）も決める */
+export type PartnerState = {
+  index: number;
+  model: 1 | 2;
+  /** 倒れている間、起こしてもらっている秒数 */
+  reviveT: number;
+  /** 付く位置を決めるときのプレイヤーの向き。プレイヤーの向きへゆっくり寄せる */
+  heading: number;
 };
 
 /** 持ち込んだスキル。Cd は次に使えるまで、T は効いている残り時間 */
@@ -60,8 +73,8 @@ export type Kit = KitChoice & { skillCd: number; skillT: number; ultCd: number; 
 
 export type Actor = {
   id: number;
-  team: "player" | "enemy";
-  kind: "player" | EnemyKind;
+  team: "player" | "enemy" | "partner";
+  kind: "player" | "partner" | EnemyKind;
   /** 違う勢力どうしは撃ち合う。プレイヤーは 0、単独の敵は1人ずつ別の番号 */
   faction: number;
   pos: Vec;
@@ -80,6 +93,9 @@ export type Actor = {
   overshieldT: number;
   /** 倒したときに回復するシールドの量 */
   killShield: number;
+  /** スキルとダッシュのクールダウンに掛ける倍率 */
+  skillCdMul: number;
+  dashCdMul: number;
   /** null なら修正をかけない（敵） */
   build: ActorBuild | null;
   mods: ActorMod[];
@@ -117,6 +133,7 @@ export type Actor = {
   /** 倒されたときに落とす持ち物（敵のみ） */
   carry: Stack[];
   ai: Ai | null;
+  partner: PartnerState | null;
 };
 
 export type Bullet = {
@@ -197,7 +214,8 @@ export type GameEvent =
   | { type: "extractReady"; pos: Vec }
   | { type: "skill"; actor: number; pos: Vec; id: SkillId | UltId }
   | { type: "barrierBreak"; pos: Vec }
-  | { type: "killShield"; actor: number; amount: number };
+  | { type: "killShield"; actor: number; amount: number }
+  | { type: "revive"; actor: number; pos: Vec };
 
 export type Outcome = "playing" | "dead" | "extracted";
 
@@ -232,6 +250,10 @@ export type World = {
   events: GameEvent[];
   outcome: Outcome;
   kills: number;
+  /** 同じ種類が効いているときに拾った強化パーツ。パートナーに渡せる */
+  spareBuffs: BuffId[];
+  /** プレイヤーが最後に当てた相手と、その時刻。パートナーが優先して狙う */
+  focus: { actor: number; t: number } | null;
   debug: { sightLevel: number; beaconLevel: number };
   nextId: number;
 };
@@ -243,7 +265,7 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
     radius: 0.42,
     facing: 0, prevFacing: 0,
     shield: shieldMax, shieldMax, health: HEALTH_MAX, moveMul: 1,
-    overshield: 0, overshieldT: 0, killShield: 0,
+    overshield: 0, overshieldT: 0, killShield: 0, skillCdMul: 1, dashCdMul: 1,
     build: null, mods: [], kit: null,
     weapons: weapons.map((def) => ({ def, mag: def.mag })),
     cur: 0, swapT: 0, reloadT: 0, fireCd: 0, readyT: 0, bloom: 0,
@@ -256,7 +278,40 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
     info: 0, seen: false, revealUntil: 0,
     carry: [],
     ai: null,
+    partner: null,
   };
+}
+
+function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
+  const spec = PARTNER.weapon;
+  const shield = PARTNER_MODELS[model].shield;
+  const a = makeActor(id, "partner", "partner", PLAYER_FACTION, pos, [computeWeapon(spec.type, spec.attachments, [], ENEMY_MIN_TTK)], shield);
+  a.facing = -Math.PI / 2;
+  a.build = {
+    weapons: [{ type: spec.type, attachments: spec.attachments }],
+    stats: { moveMul: 1, shieldMax: shield, dashCharges: 1, killShield: 0, skillCd: 1, dashCd: 1 },
+    minTtk: ENEMY_MIN_TTK,
+  };
+  // 敵と同じく弾を遅くし、ダメージを落とす
+  a.mods.push({
+    source: "partner",
+    mods: [{ stat: "damage", mul: PARTNER.damageMul - 1 }, { stat: "bulletSpeed", mul: ENEMY_BULLET_SPEED_MUL - 1 }],
+    until: null,
+  });
+  refreshStats(a);
+  a.shield = a.shieldMax;
+  for (const ws of a.weapons) ws.mag = ws.def.mag;
+  a.ai = {
+    state: "follow", group: -1, home: { ...pos },
+    path: [], pathTarget: null, repathT: 0,
+    target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: 0, reactT: 0,
+    strafe: 1, strafeT: 0, stateT: 0, waitT: 0,
+    heals: PARTNER.heals,
+    roam: false,
+    burstT: 0, burstLen: 0.8, restT: 0,
+  };
+  a.partner = { index, model, reviveT: 0, heading: -Math.PI / 2 };
+  return a;
 }
 
 /** preferAmmo を渡すと、弾薬が出たときに一定の確率でその弾薬に置き換える。tilt は出やすさに掛ける倍率 */
@@ -350,7 +405,8 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   player.facing = -Math.PI / 2;
   player.build = {
     weapons: loadout.builds,
-    stats: { moveMul: loadout.moveMul, shieldMax: loadout.shieldMax, dashCharges: DASH.charges, killShield: 0 },
+    stats: { moveMul: loadout.moveMul, shieldMax: loadout.shieldMax, dashCharges: DASH.charges, killShield: 0, skillCd: 1, dashCd: 1 },
+    minTtk: PLAYER_MIN_TTK,
   };
   const kit = loadout.kit;
   player.kit = { ...kit, skillCd: 0, skillT: 0, ultCd: ULT_START_READY ? 0 : ULTS[kit.ult].cooldown, ultT: 0 };
@@ -485,6 +541,14 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const bag = makeBag(loadout.bagSlots);
   for (const [k, v] of loadout.startItems) bagAdd(bag, k, v);
 
+  // 敵と箱を置いた後に出す。パートナーの有無で敵と箱の並びが変わらないように
+  for (const { index, model } of loadout.partners) {
+    const slot = PARTNER_SLOTS[index % PARTNER_SLOTS.length];
+    const ang = player.facing + (slot.angle * Math.PI) / 180;
+    const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist, reach);
+    actors.push(makePartner(nextId++, index, model, pos));
+  }
+
   return {
     map, rng, seed,
     time: 0, tick: 0,
@@ -494,6 +558,8 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     events: [],
     outcome: "playing",
     kills: 0,
+    spareBuffs: [],
+    focus: null,
     debug: { sightLevel: 3, beaconLevel: 1 },
     nextId,
   };

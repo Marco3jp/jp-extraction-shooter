@@ -190,6 +190,15 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
       });
       w.lootVersion++;
       w.events.push({ type: "lootChanged" });
+    } else if (target.team === "partner") {
+      // その場で止まる。プレイヤーが起こすまでランの中に残る
+      target.burnT = 0;
+      target.overshield = 0;
+      target.partner!.reviveT = 0;
+      if (target.ai) {
+        target.ai.target = null;
+        target.ai.state = "follow";
+      }
     } else {
       w.outcome = "dead";
     }

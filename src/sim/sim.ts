@@ -1,10 +1,13 @@
 import { alert, hostile, updateEnemy } from "./ai";
+import { applyBuff, canGiveBuff, GIVE_RANGE, hasBuff } from "./buffs";
+import { updatePartner } from "./partner";
 import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
   BEACON_RADIUS, DASH, DT, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
-  PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE, type HealKind, type ItemId, type ThrowableId,
+  PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
+  type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
 import { bagAdd, sortBag } from "./inventory";
@@ -16,7 +19,9 @@ export type Command =
   | { type: "open"; loot: number }
   | { type: "take"; loot: number; index: number }
   | { type: "takeAll"; loot: number }
-  | { type: "drop"; slot: number };
+  | { type: "drop"; slot: number }
+  /** 予備の強化パーツをパートナーに渡す */
+  | { type: "giveBuff"; buff: BuffId; partner: number };
 
 export type Input = {
   move: Vec;
@@ -29,6 +34,8 @@ export type Input = {
   cancel: boolean;
   /** 一番近い落ちている物を拾う／箱を開ける */
   interact: boolean;
+  /** E を押し続けているか（倒れたパートナーを起こす） */
+  interactHeld: boolean;
   dash: boolean;
   throw: ThrowableId | null;
   /** スキル（Q）とアルティメット（F） */
@@ -39,7 +46,7 @@ export type Input = {
 
 export const emptyInput = (): Input => ({
   move: { x: 0, y: 0 }, aim: { x: 0, y: 0 },
-  fire: false, sprint: false, reload: false, swap: null, heal: null, cancel: false, interact: false,
+  fire: false, sprint: false, reload: false, swap: null, heal: null, cancel: false, interact: false, interactHeld: false,
   dash: false, throw: null, skill: false, ult: false,
   commands: [],
 });
@@ -77,10 +84,60 @@ function callExtract(w: World, e: Extract, caller: Actor) {
   }
 }
 
+/** 起こせる距離にいる、倒れたパートナーのうち一番近いもの */
+export function downedPartnerNear(w: World): Actor | null {
+  let best: Actor | null = null;
+  let bd = PARTNER_REVIVE.range;
+  for (const a of w.actors) {
+    if (a.team !== "partner" || a.alive) continue;
+    const d = dist(a.pos, w.player.pos);
+    if (d <= bd) {
+      bd = d;
+      best = a;
+    }
+  }
+  return best;
+}
+
+function revivePartner(w: World, a: Actor) {
+  a.alive = true;
+  a.health = PARTNER_REVIVE.health;
+  a.shield = 0;
+  a.vel = { x: 0, y: 0 };
+  a.partner!.reviveT = 0;
+  const ai = a.ai!;
+  ai.state = "follow";
+  ai.path = [];
+  ai.pathTarget = null;
+  ai.target = null;
+  w.events.push({ type: "revive", actor: a.id, pos: { ...a.pos } });
+  w.events.push({ type: "notice", text: `パートナー${a.partner!.index + 1}が立ち上がった` });
+}
+
+/** 強化パーツはカバンに入れず、拾った時点で効かせる。もう効いていれば、パートナーに渡せるときだけ予備として持つ */
+function takeBuff(w: World, s: { item: ItemId; count: number }, got: Map<ItemId, number>) {
+  const id = s.item as BuffId;
+  if (hasBuff(w.player, id)) {
+    if (!w.actors.some((a) => canGiveBuff(a, id))) {
+      w.events.push({ type: "notice", text: `${ITEMS[id].name}はもう効いている` });
+      return;
+    }
+    w.spareBuffs.push(id);
+  } else {
+    applyBuff(w.player, id);
+  }
+  got.set(id, (got.get(id) ?? 0) + 1);
+  s.count = 0;
+}
+
 /** 山を1つカバンへ移す。全部入ったら true */
 function takeStack(w: World, l: Loot, index: number, got: Map<ItemId, number>): boolean {
   const s = l.items[index];
   if (!s) return true;
+  if (ITEMS[s.item].category === "buff") {
+    takeBuff(w, s, got);
+    return true;
+  }
   const added = bagAdd(w.bag, s.item, s.count);
   if (added > 0) got.set(s.item, (got.get(s.item) ?? 0) + added);
   s.count -= added;
@@ -112,6 +169,15 @@ function runCommand(w: World, c: Command) {
     w.loot.push({ id: w.nextId++, pos, kind: "ground", items: [s], opened: true, angle: ang });
     w.lootVersion++;
     w.events.push({ type: "lootChanged" });
+    return;
+  }
+  if (c.type === "giveBuff") {
+    const to = w.actors.find((a) => a.id === c.partner);
+    const i = w.spareBuffs.indexOf(c.buff);
+    if (!to || i < 0 || dist(to.pos, p.pos) > GIVE_RANGE || !canGiveBuff(to, c.buff)) return;
+    w.spareBuffs.splice(i, 1);
+    applyBuff(to, c.buff);
+    w.events.push({ type: "notice", text: `パートナー${to.partner!.index + 1}に${ITEMS[c.buff].name}を渡した` });
     return;
   }
   const l = w.loot.find((x) => x.id === c.loot);
@@ -162,6 +228,15 @@ function updatePlayer(w: World, input: Input) {
     }
   }
 
+  const down = input.interactHeld ? downedPartnerNear(w) : null;
+  for (const a of w.actors) {
+    if (a.partner && a !== down) a.partner.reviveT = 0;
+  }
+  if (down) {
+    down.partner!.reviveT += DT;
+    if (down.partner!.reviveT >= PARTNER_REVIVE.time) revivePartner(w, down);
+  }
+
   const aimAng = Math.atan2(input.aim.y - p.pos.y, input.aim.x - p.pos.x);
   p.facing = aimAng;
   if (input.throw) throwGrenade(w, p, input.throw, input.aim);
@@ -183,7 +258,7 @@ function updatePlayer(w: World, input: Input) {
     p.dashT = DASH.time;
     p.dashSpeed = DASH.distance / DASH.time;
     p.dashSteer = false;
-    if (p.dashCharges === p.dashMax) p.dashCd = DASH.cooldown;
+    if (p.dashCharges === p.dashMax) p.dashCd = DASH.cooldown * p.dashCdMul;
     p.dashCharges--;
     p.sprinting = false;
     if (p.heal) cancelHeal(w, p);
@@ -295,6 +370,7 @@ function updateBullets(w: World, byId: Map<number, Actor>) {
       if (hitActor) {
         const shooter = byId.get(b.owner);
         applyDamage(w, hitActor, b.damage, shooter, at);
+        if (shooter === w.player) w.focus = { actor: hitActor.id, t: w.time };
         if (hitActor.ai && shooter) alert(w, hitActor, shooter.pos, shooter);
       } else {
         w.events.push({ type: "wallHit", pos: at });
@@ -326,8 +402,10 @@ function hearShots(w: World, byId: Map<number, Actor>) {
   }
 }
 
+/** プレイヤーとパートナーの視線で、敵の見え方の段階を決める。パートナーが見ている敵はプレイヤーが見ているのと同じ段階になる */
 function updateInfo(w: World) {
   const p = w.player;
+  const partners = w.actors.filter((a) => a.team === "partner" && a.alive);
   for (const e of w.actors) {
     if (e.team !== "enemy") continue;
     if (!e.alive) {
@@ -337,7 +415,8 @@ function updateInfo(w: World) {
     }
     const d = dist(e.pos, p.pos);
     e.seen = d <= SIGHT_RANGE && w.map.los(p.pos, e.pos);
-    let level = e.seen ? w.debug.sightLevel : 0;
+    const partnerSees = !e.seen && partners.some((o) => dist(o.pos, e.pos) <= SIGHT_RANGE && w.map.los(o.pos, e.pos));
+    let level = e.seen || partnerSees ? w.debug.sightLevel : 0;
     if (d <= BEACON_RADIUS) level = Math.max(level, w.debug.beaconLevel);
     if (w.time < e.revealUntil) level = Math.max(level, SCAN.level);
     e.info = level;
@@ -363,7 +442,9 @@ export function step(w: World, input: Input) {
 
   updatePlayer(w, input);
   for (const a of w.actors) {
-    if (a.alive && a.ai) updateEnemy(w, a, byId);
+    if (!a.alive || !a.ai) continue;
+    if (a.team === "partner") updatePartner(w, a, byId);
+    else updateEnemy(w, a, byId);
   }
 
   for (const a of w.actors) {
@@ -379,6 +460,10 @@ export function step(w: World, input: Input) {
   updateBullets(w, byId);
   updateThrowables(w, byId);
   updateInfo(w);
+  // 起こしている途中で撃たれたら押し直し
+  if (w.events.some((ev) => ev.type === "hit" && ev.actor === w.player.id)) {
+    for (const a of w.actors) if (a.partner) a.partner.reviveT = 0;
+  }
 
   const p = w.player;
   for (const e of w.extracts) {

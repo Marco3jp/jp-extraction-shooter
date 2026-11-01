@@ -109,6 +109,10 @@ export class Sfx {
         }
         case "death":
           this.burst(0.4, 200, 0.5, 1);
+          if (byId.get(ev.actor)?.team === "partner") this.tone([660, 440, 330], 0.1, 0.2, "sawtooth");
+          break;
+        case "revive":
+          this.tone([440, 660, 880, 1100], 0.07, 0.16, "triangle");
           break;
         case "explosion": {
           const v = near(ev.pos, 70);

@@ -3,11 +3,12 @@ import { DEATH_LOSES_RUN_LOOT, START_AMMO_MAGS, START_HEALS } from "../data/cons
 import { ARMORS, BAGS, SHOES, type ArmorId, type BagId, type ShoesId } from "../data/gear";
 import { ITEMS, MATERIALS, type ItemId, type MaterialId } from "../data/items";
 import { RECIPES, type Recipe } from "../data/recipes";
+import { PARTNER_COUNT, type PartnerModel } from "../data/partners";
 import { PASSIVES, SKILLS, ULTS, type KitChoice, type PassiveId, type SkillId, type UltId } from "../data/skills";
 import { WEAPON_TYPES, type WeaponDef, type WeaponType } from "../data/weapons";
 import { computeWeapon } from "../sim/stats";
 
-export const PROFILE_VERSION = 2;
+export const PROFILE_VERSION = 4;
 
 /** ランの外で持ち続けるもの。保存の単位 */
 export type Profile = {
@@ -27,6 +28,8 @@ export type Profile = {
   stats: { runs: number; extractions: number; deaths: number; kills: number };
   /** ランを始める場所。null ならマップの出発地点から */
   camp: Camp | null;
+  /** パートナー。並びが番号になる。model が 0 ならまだ作っていない */
+  partners: { model: PartnerModel; enabled: boolean }[];
 };
 
 /** x・y はマップのマス目の座標 */
@@ -51,6 +54,7 @@ export function defaultProfile(): Profile {
     },
     stats: { runs: 0, extractions: 0, deaths: 0, kills: 0 },
     camp: null,
+    partners: Array.from({ length: PARTNER_COUNT }, () => ({ model: 0 as PartnerModel, enabled: false })),
   };
 }
 
@@ -64,6 +68,11 @@ export function normalizeProfile(p: Partial<Profile>): Profile {
     weaponConfig: { ...d.weaponConfig, ...(p.weaponConfig ?? {}) },
     loadout: { ...d.loadout, ...(p.loadout ?? {}) },
     stats: { ...d.stats, ...(p.stats ?? {}) },
+    partners: d.partners.map((x, i) => {
+      const y = { ...x, ...(p.partners?.[i] ?? {}) };
+      if (![0, 1, 2].includes(y.model)) y.model = 0;
+      return y;
+    }),
     version: PROFILE_VERSION,
   };
   // スキルの名前を変えたり消したりしたときに、古いセーブが読めなくならないように
@@ -154,6 +163,11 @@ export function setLoadoutUlt(p: Profile, id: UltId) {
   p.loadout.ult = id;
 }
 
+export function setPartnerEnabled(p: Profile, index: number, enabled: boolean) {
+  const x = p.partners[index];
+  if (x && x.model > 0) x.enabled = enabled;
+}
+
 // ---- クラフト ----
 
 /** 作れない理由。作れるなら null */
@@ -163,6 +177,14 @@ export function craftBlocker(p: Profile, r: Recipe): string | null {
   if (o.kind === "armor" && p.armors.includes(o.id)) return "持っている";
   if (o.kind === "bag" && p.bags.includes(o.id)) return "持っている";
   if (o.kind === "shoes" && p.shoes.includes(o.id)) return "持っている";
+  if (o.kind === "partner") {
+    const cur = p.partners[o.index]?.model ?? 0;
+    const upgrade = o.index === 0 && o.model === 2;
+    if (cur >= o.model) return upgrade ? "改良済み" : "持っている";
+    if (o.index > 0 && p.partners[o.index - 1].model === 0) return `${o.index}体目を先に作る`;
+    if (upgrade && cur === 0) return "1体目を先に作る";
+    if (upgrade && p.partners[1].model < 2) return "2体目を先に作る";
+  }
   if (p.money < r.money) return "お金が足りない";
   for (const m of MATERIALS) if ((p.materials[m] ?? 0) < (r.materials[m] ?? 0)) return `${ITEMS[m].name}が足りない`;
   return null;
@@ -181,6 +203,12 @@ export function craft(p: Profile, recipeId: string): boolean {
     case "armor": p.armors.push(o.id); break;
     case "bag": p.bags.push(o.id); break;
     case "shoes": p.shoes.push(o.id); break;
+    case "partner": {
+      const x = p.partners[o.index];
+      if (x.model === 0) x.enabled = true;
+      x.model = o.model;
+      break;
+    }
   }
   return true;
 }
@@ -204,6 +232,8 @@ export type RunLoadout = {
   moveMul: number;
   bagSlots: number;
   startItems: [ItemId, number][];
+  /** 連れていくパートナーの番号（0 始まり）と型 */
+  partners: { index: number; model: 1 | 2 }[];
 };
 
 export function makeRunLoadout(p: Profile): RunLoadout {
@@ -220,6 +250,7 @@ export function makeRunLoadout(p: Profile): RunLoadout {
     moveMul: armor.moveMul * SHOES[p.loadout.shoes].moveMul,
     bagSlots: BAGS[p.loadout.bag].slots,
     startItems,
+    partners: p.partners.flatMap((x, index) => (x.enabled && x.model > 0 ? [{ index, model: x.model as 1 | 2 }] : [])),
   };
 }
 
