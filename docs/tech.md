@@ -36,7 +36,9 @@
 
 マップごとの設定（範囲・名前・出発地点・脱出地点の候補・勢力ごとの縄張り）は `tools/maps/<名前>.json` に書く。出発地点などはマップの幅・高さに対する割合で書き、ゲームはマップの JSON の `layout` から読む。
 
-0. `npm run fetch-map -- tools/maps/<名前>.json` で、範囲内の `building` `highway` `landuse` `leisure` `railway` `amenity` `shop` の way と、お店・施設・地名・駅の点を Overpass API から取得して `tools/osm-raw/` に置く
+0. 範囲内の `building` `highway` `landuse` `leisure` `railway` `amenity` `shop` の way と、お店・施設・地名・駅の点を取り出して `tools/osm-raw/` に置く。取り出し方は2つあり、出力の形は同じ
+   - `npm run extract-map -- tools/maps/<名前>.json tools/osm-raw/<地方>.osm.pbf`：Geofabrik の地方ごとのファイル（`<地方>-latest.osm.pbf`）から osmium-tool で切り出す。ふだんはこちらを使う。multipolygon の relation も、外側の輪を way として出す
+   - `npm run fetch-map -- tools/maps/<名前>.json`：Overpass API から取得する。relation は取らない
 1. 取得したものを描き込む。細い歩道や階段は描かない
 2. ならす：1〜2m の隙間と、建物と歩道の間の幅4m以下の空き地は建物で埋める。建物の輪郭は3×3の多数決でならす。小さな地面のかけらは周りに合わせる
 3. 縮める：縦横に近い大通り・高架の鉄道、4000㎡以上の建物、1000㎡以上の駅と公園を「残す場所」にして、その行・列は切らない。それ以外では、同じ向きの細い道が3本以上並ぶと内側を1本おきに抜き、36m を超える街区は 28m に詰める
@@ -46,7 +48,8 @@
 
 `npm run map -- tools/maps/<名前>.json` で 1〜6 を通して `public/maps/<名前>.json` に書き出す。
 
-- 取得の結果（`tools/osm-raw/`）はリポジトリに入れていない。Overpass API が混んでいると 429 / 504 が返るので、取得スクリプトは別のサーバーも順に試す
+- 地方のファイルと取り出した結果（`tools/osm-raw/`）はリポジトリに入れていない。Overpass API が混んでいると 429 / 504 が返るので、取得スクリプトは別のサーバーも順に試す
+- 秋葉原の範囲では、2つの取り出し方で way は全部一致した。点の差は、地方のファイルを作った時刻より後の編集だけだった
 - 建物の種類の判定は `tools/buildings.py` にある。種類の名前はゲーム側の `src/data/buildings.ts` と揃える
 - 町名は、地名の点（`place=quarter` `neighbourhood` `suburb`）の位置を中心にして、一番近い中心の町名にする。「外神田三丁目」のような丁目は「外神田」にまとめる。マップの外150mより遠い町は入れない
 - 遊びに関わる格子（地面・塞がっている所・遮蔽物）は 1〜4 だけで決まる。5・6 を変えても格子は変わらない
@@ -104,7 +107,8 @@
 ## 試作のファイル
 | パス | 中身 |
 |---|---|
-| `tools/fetch_osm.py` | マップの範囲の OpenStreetMap のデータを取得する |
+| `tools/extract_pbf.py` | Geofabrik の地方ごとのファイルから、マップの範囲を切り出す |
+| `tools/fetch_osm.py` | マップの範囲の OpenStreetMap のデータを Overpass API から取得する |
 | `tools/osm_to_map.py` | OpenStreetMap の JSON をゲーム用マップに変換する |
 | `tools/buildings.py` | 建物の種類の判定 |
 | `tools/maps/` | マップごとの範囲・出発地点・脱出地点・縄張り |

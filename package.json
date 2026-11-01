@@ -10,7 +10,8 @@
     "ttk": "rolldown tools/ttk.ts -p node -o node_modules/.cache/ttk.mjs --log-level silent && node node_modules/.cache/ttk.mjs",
     "map": "python3 -I tools/osm_to_map.py",
     "smoke": "rolldown tools/smoke.ts -p node -o node_modules/.cache/smoke.mjs --log-level silent && node node_modules/.cache/smoke.mjs",
-    "fetch-map": "python3 -I tools/fetch_osm.py"
+    "fetch-map": "python3 -I tools/fetch_osm.py",
+    "extract-map": "python3 -I tools/extract_pbf.py"
   },
   "dependencies": {
     "preact": "^11.1.1",

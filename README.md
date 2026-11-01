@@ -19,12 +19,14 @@ npm run dev
 
 セーブはブラウザの IndexedDB に入る。拠点の「セーブ」から JSON で書き出せる。
 
-地図を取り直すときは、`tools/maps/akihabara.json` の範囲などを書き換えてから、次を実行する。
+地図を取り直すときは、[Geofabrik](https://download.geofabrik.de/asia/japan.html) から地方ごとのファイル（関東なら `kanto-latest.osm.pbf`）を `tools/osm-raw/` に置き、`tools/maps/akihabara.json` の範囲などを書き換えてから、次を実行する。[osmium-tool](https://osmcode.org/osmium-tool/) が要る。
 
 ```sh
-npm run fetch-map -- tools/maps/akihabara.json
+npm run extract-map -- tools/maps/akihabara.json tools/osm-raw/kanto-latest.osm.pbf
 npm run map -- tools/maps/akihabara.json
 ```
+
+Overpass API から取るときは `npm run fetch-map -- tools/maps/akihabara.json` を使う。
 
 地図データ © OpenStreetMap contributors（ODbL）
 
