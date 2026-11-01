@@ -47,8 +47,6 @@ export type MapIndex = {
   layout: {
     start: [number, number];
     extracts: [number, number][];
-    /** 勢力の番号ごとの縄張り [左, 上, 右, 下] */
-    factionAreas: Record<string, [number, number, number, number]>;
   };
   /** 町名と、その中心 */
   areas: { name: string; x: number; y: number }[];

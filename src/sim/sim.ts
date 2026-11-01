@@ -5,10 +5,11 @@ import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
-  BEACON_RADIUS, DASH, DT, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
+  BEACON_RADIUS, DASH, DT, ENEMY_ACTIVE_RANGE, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
   type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
+import { syncSpawns } from "./spawn";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
 import { bagAdd, sortBag } from "./inventory";
 import { throwGrenade, updateThrowables } from "./throwables";
@@ -166,7 +167,7 @@ function runCommand(w: World, c: Command) {
       pos.x = p.pos.x;
       pos.y = p.pos.y;
     }
-    w.loot.push({ id: w.nextId++, pos, kind: "ground", items: [s], opened: true, angle: ang });
+    w.loot.push({ id: w.nextId++, spawn: null, pos, kind: "ground", items: [s], opened: true, angle: ang });
     w.lootVersion++;
     w.events.push({ type: "lootChanged" });
     return;
@@ -425,6 +426,7 @@ function updateInfo(w: World) {
 
 export function step(w: World, input: Input) {
   if (w.outcome !== "playing") return;
+  syncSpawns(w);
   w.events = [];
   w.tick++;
   w.time += DT;
@@ -441,10 +443,12 @@ export function step(w: World, input: Input) {
   tickSkillObjects(w);
 
   updatePlayer(w, input);
+  const pp = w.player.pos;
   for (const a of w.actors) {
     if (!a.alive || !a.ai) continue;
     if (a.team === "partner") updatePartner(w, a, byId);
-    else updateEnemy(w, a, byId);
+    else if (Math.hypot(a.pos.x - pp.x, a.pos.y - pp.y) <= ENEMY_ACTIVE_RANGE) updateEnemy(w, a, byId);
+    else a.vel = { x: 0, y: 0 };
   }
 
   for (const a of w.actors) {

@@ -185,7 +185,7 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
     if (target.team === "enemy") {
       if (by?.team === "player") w.kills++;
       w.loot.push({
-        id: w.nextId++, pos: { ...target.pos }, kind: "deathbox",
+        id: w.nextId++, spawn: null, pos: { ...target.pos }, kind: "deathbox",
         items: target.carry.map((s) => ({ ...s })), opened: false, angle: target.facing,
       });
       w.lootVersion++;

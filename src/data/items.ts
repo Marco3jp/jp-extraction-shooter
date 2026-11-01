@@ -73,8 +73,8 @@ export const LOOT_TABLE: { item: ItemId; min: number; max: number; weight: numbe
 
 /** 1つの箱に入っている山の数 */
 export const BIN_ITEMS = 4;
-/** 箱がまとまって置かれている場所の数と、1か所あたりの箱の数の出やすさ（1〜4個） */
-export const BIN_CLUSTERS = 70;
+/** 歩けるマス1万あたりの、箱がまとまって置かれている場所の数。1か所あたりの箱の数の出やすさ（1〜4個） */
+export const BIN_CLUSTERS_PER_10K = 7.1;
 export const BIN_CLUSTER_SIZE_WEIGHTS = [30, 30, 25, 15];
-/** 地面にそのまま落ちている山の数 */
-export const GROUND_ITEMS = 260;
+/** 歩けるマス1万あたりの、地面にそのまま落ちている山の数 */
+export const GROUND_ITEMS_PER_10K = 26;

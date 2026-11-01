@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import {
-  BARRIER, BUFF_IDS, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
+  BARRIER, BIN_ITEMS, BUFF_IDS, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
 } from "../src/sim/data";
 import { buffsOf } from "../src/sim/buffs";
@@ -154,7 +154,8 @@ for (const seed of [1, 2]) {
 function duel(prof: Profile, seed: number, each?: (w: World, input: Input) => void): { win: boolean; time: number } | null {
   const w = createWorld(map, seed, makeRunLoadout(prof));
   if (w.player.kit) w.player.kit.ultCd = 0;
-  const e = w.actors.filter((a) => a.ai && a.ai.group === 0)[0];
+  // 相手は近距離型にする。グループの組み合わせは区画ごとに変わるので、型で選ぶ
+  const e = w.actors.find((a) => a.team === "enemy" && a.kind === "short")!;
   for (const o of w.actors) if (o.ai && o !== e && Math.hypot(o.pos.x - e.pos.x, o.pos.y - e.pos.y) < 90) o.alive = false;
   let placed = false;
   for (let k = 0; k < 64 && !placed; k++) {
@@ -221,7 +222,7 @@ const rich = (): Profile => {
   const w = createWorld(map, 7, baseLoadout);
   const p = w.player;
   for (const a of w.actors) if (a.ai) a.alive = false;
-  const e = w.actors.find((a) => a.ai)!;
+  const e = w.actors.find((a) => a.team === "enemy" && a.kind === "short")!;
   // 見通しのいい場所で、10m 先に敵を1人置く
   let spot = null;
   const spotRng = new Rng(7);
@@ -383,7 +384,7 @@ const rich = (): Profile => {
     for (let i = 0; i < ticks; i++) step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 10, y: w.player.pos.y }, ...f(i) });
   };
   const enemyAt = (w: World, pos: Vec) => {
-    const e = w.actors.find((a) => a.ai)!;
+    const e = w.actors.find((a) => a.team === "enemy" && a.kind === "short")!;
     e.alive = true;
     e.pos = { ...pos };
     e.vel = { x: 0, y: 0 };
@@ -574,7 +575,7 @@ const rich = (): Profile => {
   // 足元に強化パーツを1つ置いて E で拾わせる
   const pick = (w: World, id: BuffId) => {
     const p = w.player;
-    w.loot.push({ id: w.nextId++, pos: { ...p.pos }, kind: "ground", items: [{ item: id, count: 1 }], opened: true, angle: 0 });
+    w.loot.push({ id: w.nextId++, spawn: null, pos: { ...p.pos }, kind: "ground", items: [{ item: id, count: 1 }], opened: true, angle: 0 });
     step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y }, interact: true });
   };
   const withPartners = (n: number) => {
@@ -686,7 +687,11 @@ const rich = (): Profile => {
   const squad = (partnerCount: number, seed: number) => {
     const w = createWorld(map, seed, makeRunLoadout(profWith(partnerCount)));
     const p = w.player;
-    const group = w.actors.filter((a) => a.ai && a.team === "enemy" && a.ai.group === 0);
+    // 近距離・中距離・遠距離が1人ずつのグループと撃ち合う。グループの組み合わせは区画ごとに変わるので、組み合わせで選ぶ
+    const byGroup = new Map<number, Actor[]>();
+    for (const a of w.actors) if (a.ai && a.team === "enemy") byGroup.set(a.ai.group, [...(byGroup.get(a.ai.group) ?? []), a]);
+    const group = [...byGroup.values()].find((g) => g.map((a) => a.kind).sort().join() === "long,mid,short");
+    if (!group) return null;
     const center = group[0].pos;
     for (const o of w.actors) if (o.team === "enemy" && !group.includes(o) && Math.hypot(o.pos.x - center.x, o.pos.y - center.y) < 120) o.alive = false;
     let placed = false;
@@ -946,5 +951,41 @@ const rich = (): Profile => {
   console.log(
     `区画の出し入れ（読む 160m・捨てる 240m）: ${ticks}ティック 読んだ ${streamer.loads}回 捨てた ${streamer.drops}回 同時に持った区画 最大 ${maxLoaded}/${mapIndex.chunks.length}、`
       + `周りの区画が間に合わなかった回数 ${missing}　1ティック平均 ${(total / ticks).toFixed(3)}ms 最大 ${worst.toFixed(2)}ms`,
+  );
+}
+
+// 区画を捨てて読み直すと、同じ敵と箱が出て、倒した敵・開けた箱・拾った物は元に戻らない
+{
+  const w = createWorld(map, 11, baseLoadout);
+  const snap = (key: string) => ({
+    enemies: w.actors.filter((a) => a.spawn?.chunk === key).map((a) => `${a.spawn!.n}:${a.kind}:${a.pos.x.toFixed(2)},${a.pos.y.toFixed(2)}`),
+    loot: w.loot.filter((l) => l.spawn?.chunk === key).map((l) => `${l.spawn!.n}:${l.kind}:${l.pos.x.toFixed(2)},${l.pos.y.toFixed(2)}:${l.items.map((i) => i.item + i.count).join("+")}`),
+  });
+  const e = w.actors.find((a) => a.team === "enemy" && a.spawn)!;
+  const key = e.spawn!.chunk;
+  const bin = w.loot.find((l) => l.kind === "bin" && l.spawn?.chunk === key);
+  const ground = w.loot.find((l) => l.kind === "ground" && l.spawn?.chunk === key);
+  const before = snap(key);
+  e.alive = false;
+  if (bin) {
+    bin.items = bin.items.slice(1);
+    bin.opened = true;
+  }
+  if (ground) w.loot = w.loot.filter((l) => l !== ground);
+  const [i, j] = key.split("_").map(Number);
+  const idle = () => step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 1, y: w.player.pos.y } });
+  map.removeChunk(i, j);
+  idle();
+  const gone = snap(key);
+  map.addChunk(readChunk(i, j));
+  idle();
+  const after = snap(key);
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, k) => x === b[k]);
+  const expectEnemies = before.enemies.filter((x) => !x.startsWith(`${e.spawn!.n}:`));
+  const binAfter = bin && w.loot.find((l) => l.spawn?.chunk === key && l.spawn.n === bin.spawn!.n);
+  console.log(
+    `区画を読み直す（${key}）: 捨てた後の敵 ${gone.enemies.length}人・箱と物 ${gone.loot.length}個、`
+      + `読み直した敵 ${after.enemies.length}/${before.enemies.length}人（倒した1人を除いて同じ ${same(after.enemies.filter((x) => expectEnemies.some((y) => y.split(":")[0] === x.split(":")[0])), expectEnemies)}）、`
+      + `箱 ${bin ? `中身 ${binAfter?.items.length}/${BIN_ITEMS} 開いている ${binAfter?.opened}` : "なし"}、拾った物 ${ground ? (w.loot.some((l) => l.spawn?.chunk === key && l.spawn.n === ground.spawn!.n) ? "戻った" : "戻らない") : "なし"}`,
   );
 }

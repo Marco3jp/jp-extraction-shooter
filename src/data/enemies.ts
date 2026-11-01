@@ -60,7 +60,7 @@ export function factionDef(f: number): FactionDef {
   return FACTIONS[f] ?? SOLO_FACTION;
 }
 
-/** 配置する敵。縄張りはマップごとに決める（マップの JSON の layout.factionAreas） */
+/** 勢力ごとのグループの組み合わせ。グループを置くたびに、その場所の町の勢力の組み合わせから1つ選ぶ */
 export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][] }[] = [
   {
     faction: 1,
@@ -83,7 +83,14 @@ export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][] }[] = [
     ],
   },
 ];
-export const SOLO_COUNT = 9;
+/** 歩けるマス1万あたりの、グループと単独の敵の数。区画ごとに、区画の歩けるマスの数から決める。数値は仮 */
+export const GROUPS_PER_10K = 1.0;
+export const SOLOS_PER_10K = 0.9;
+/** グループの真ん中・単独の敵を、出発地点からこの距離（m）より近くに置かない */
+export const GROUP_MIN_FROM_START = 80;
+/** プレイヤーからこの距離（m）より遠い敵は止めておく。区画を読む距離（640m）より短くする */
+export const ENEMY_ACTIVE_RANGE = 384;
+export const SOLO_MIN_FROM_START = 60;
 export const SOLO_KINDS: EnemyKind[] = ["short", "mid", "long"];
 /** 巡回先を移しながら漁り歩くグループの割合。単独の敵は全員そうする */
 export const ROAMING_GROUP_RATE = 0.5;

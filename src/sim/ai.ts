@@ -325,6 +325,11 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
         } else if (ai.pathTarget && dist(e.pos, ai.pathTarget) >= 1) {
           const far = dist(e.pos, ai.home) > 30;
           vel = seek(w, e, ai.pathTarget, far ? ENEMY_SPEED.move * 0.7 : ENEMY_SPEED.patrol);
+          // 探索の上限までに道が見つからなかった。同じ行き先を探し直し続けると重いので、今いる所を巡回の中心にする
+          if (!ai.path.length) {
+            ai.home = { ...e.pos };
+            ai.pathTarget = null;
+          }
         }
         if (Math.hypot(vel.x, vel.y) > 0.1) turnTo(e, Math.atan2(vel.y, vel.x), 4);
         break;

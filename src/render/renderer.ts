@@ -140,6 +140,7 @@ export class Renderer {
   private camInit = false;
   private buildingMat: THREE.ShaderMaterial;
   private actorViews = new Map<number, ActorView>();
+  private actorsSeen: Actor[] | null = null;
   private bullets: THREE.InstancedMesh;
   private particles: Particle[] = [];
   private particleMesh: THREE.InstancedMesh;
@@ -860,6 +861,16 @@ export class Renderer {
     this.buildingMat.uniforms.uPlayerDepth.value = -pView.z;
     this.buildingMat.uniforms.uRadius.value = 150 * this.gl.getPixelRatio();
 
+    // 区画を捨てると、その区画の敵が w.actors から外れる（そのときは配列が作り直される）
+    if (this.actorsSeen !== w.actors) {
+      this.actorsSeen = w.actors;
+      const ids = new Set(w.actors.map((a) => a.id));
+      for (const [id, v] of this.actorViews) {
+        if (ids.has(id)) continue;
+        this.scene.remove(v.group);
+        this.actorViews.delete(id);
+      }
+    }
     for (const a of w.actors) {
       let v = this.actorViews.get(a.id);
       if (!v) {

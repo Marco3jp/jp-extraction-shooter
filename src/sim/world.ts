@@ -1,8 +1,5 @@
 import {
-  BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, BUILDING_USE, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
-  GROUND_ITEMS, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, ROAMING_GROUP_RATE, SOLO_COUNT,
-  LOOT_TILT, SOLO_FACTION_BASE, SOLO_KINDS,
-  DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
+  ENEMY, ENEMY_BULLET_SPEED_MUL, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
   type ActorStats, type BuffId, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
   type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
 } from "./data";
@@ -10,8 +7,9 @@ import type { RunLoadout } from "../meta/profile";
 import { computeWeapon } from "./stats";
 import { refreshStats } from "./skills";
 import { bagAdd, makeBag, type Bag, type Stack } from "./inventory";
-import { GameMap, Solid, type Vec } from "./map";
+import { GameMap, type Vec } from "./map";
 import { Rng } from "./rng";
+import { syncSpawns, type ChunkMemory, type SpawnRef } from "./spawn";
 
 export type WeaponState = { def: WeaponDef; mag: number };
 
@@ -144,6 +142,8 @@ export type Actor = {
   carry: Stack[];
   ai: Ai | null;
   partner: PartnerState | null;
+  /** 区画から置いた敵。プレイヤーとパートナーは null */
+  spawn: SpawnRef | null;
 };
 
 export type Bullet = {
@@ -193,6 +193,8 @@ export type LootKind = "ground" | "bin" | "deathbox";
 
 export type Loot = {
   id: number;
+  /** 区画から置いた箱・落ちている物。倒した敵の持ち物やプレイヤーが捨てた物は null */
+  spawn: SpawnRef | null;
   pos: Vec;
   kind: LootKind;
   items: Stack[];
@@ -266,9 +268,18 @@ export type World = {
   focus: { actor: number; t: number } | null;
   debug: { sightLevel: number; beaconLevel: number };
   nextId: number;
+  startPos: Vec;
+  /** 持ち込んだ武器の弾薬。箱から出やすくする */
+  preferAmmo: AmmoId[];
+  /** 敵と箱を置いた区画と、そこに置いた箱・落ちている物の番号 */
+  spawned: Map<string, { loot: number[] }>;
+  /** 捨てた区画で、倒した敵と、中身が変わった箱・拾われた物 */
+  memory: Map<string, ChunkMemory>;
+  nextGroup: number;
+  nextSolo: number;
 };
 
-function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction: number, pos: Vec, weapons: WeaponDef[], shieldMax: number): Actor {
+export function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction: number, pos: Vec, weapons: WeaponDef[], shieldMax: number): Actor {
   return {
     id, team, kind, faction,
     pos: { ...pos }, prev: { ...pos }, vel: { x: 0, y: 0 },
@@ -289,6 +300,7 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
     carry: [],
     ai: null,
     partner: null,
+    spawn: null,
   };
 }
 
@@ -348,7 +360,7 @@ export function rollStack(rng: Rng, preferAmmo: AmmoId[] = [], tilt: Partial<Rec
 }
 
 const enemyWeapons = new Map<EnemyKind, WeaponDef>();
-function enemyWeapon(kind: EnemyKind): WeaponDef {
+export function enemyWeapon(kind: EnemyKind): WeaponDef {
   let w = enemyWeapons.get(kind);
   if (!w) {
     const spec = ENEMY[kind].weapon;
@@ -359,7 +371,7 @@ function enemyWeapon(kind: EnemyKind): WeaponDef {
   return w;
 }
 
-function pickWeighted(rng: Rng, weights: number[]): number {
+export function pickWeighted(rng: Rng, weights: number[]): number {
   const total = weights.reduce((a, b) => a + b, 0);
   let r = rng.next() * total;
   for (let i = 0; i < weights.length; i++) if ((r -= weights[i]) < 0) return i;
@@ -369,9 +381,8 @@ function pickWeighted(rng: Rng, weights: number[]): number {
 /** start を渡すと、その近くの空いている場所から始める（キャンプ）。渡さなければマップの出発地点から */
 export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, start?: Vec): World {
   const rng = new Rng(seed);
-  const W = map.w;
 
-  const nearestFree = (px: number, py: number): Vec => {
+  const nearestFree = (px: number, py: number): Vec | null => {
     const tx = Math.floor(px), ty = Math.floor(py);
     for (let r = 0; r < 300; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -384,7 +395,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
         }
       }
     }
-    throw new Error("空いている場所が見つからない");
+    return null;
   };
 
   map.resetSolid();
@@ -392,23 +403,11 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const startPos = start
     ? nearestFree(start.x, start.y)
     : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h);
+  if (!startPos) throw new Error("出発地点の周りに空いている場所が見つからない");
+  // 遠くてまだ読んでいない脱出地点は、書いてある位置のまま置く
   const extracts: Extract[] = layout.extracts.map(([fx, fy]) => ({
-    pos: nearestFree(fx * map.w, fy * map.h), readyAt: null, ready: false, progress: 0,
+    pos: nearestFree(fx * map.w, fy * map.h) ?? { x: fx * map.w, y: fy * map.h }, readyAt: null, ready: false, progress: 0,
   }));
-
-  const freeCells: number[] = [];
-  const wallSideCells: number[] = [];
-  const isBuilding = (x: number, y: number) => map.solidAt(x, y) === Solid.building;
-  for (let y = 2; y < map.h - 2; y++) {
-    for (let x = 2; x < map.w - 2; x++) {
-      if (map.blocked(x, y)) continue;
-      const i = x + y * W;
-      freeCells.push(i);
-      if (isBuilding(x + 1, y) || isBuilding(x - 1, y) || isBuilding(x, y + 1) || isBuilding(x, y - 1)) wallSideCells.push(i);
-    }
-  }
-  const cellPos = (i: number): Vec => ({ x: (i % W) + 0.5, y: ((i / W) | 0) + 0.5 });
-  const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
   let nextId = 1;
   const player = makeActor(nextId++, "player", "player", PLAYER_FACTION, startPos, loadout.weapons, loadout.shieldMax);
@@ -429,143 +428,14 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const preferAmmo = loadout.weapons.map((w) => w.ammo);
   const actors: Actor[] = [player];
 
-  const spawnEnemy = (kind: EnemyKind, faction: number, pos: Vec, group: number, roam: boolean) => {
-    const e = makeActor(nextId++, "enemy", kind, faction, pos, [enemyWeapon(kind)], ENEMY_SHIELD);
-    e.facing = rng.range(-Math.PI, Math.PI);
-    e.ai = {
-      state: "patrol", group, home: { ...pos },
-      path: [], pathTarget: null, repathT: 0,
-      target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: rng.next() * 0.2, reactT: 0,
-      strafe: 1, strafeT: 0, stateT: 0, waitT: rng.range(0, 3),
-      heals: 2,
-      roam,
-      burstT: 0, burstLen: 0.8, restT: 0,
-    };
-    const ammo = e.weapons[0].def.ammo;
-    e.carry.push({ item: ammo, count: 30 + rng.int(4) * 10 });
-    if (rng.chance(0.75)) e.carry.push({ item: "cell", count: 1 + rng.int(3) });
-    if (rng.chance(0.5)) e.carry.push({ item: "medSmall", count: 1 + rng.int(2) });
-    if (rng.chance(0.15)) e.carry.push({ item: "medLarge", count: 1 });
-    if (rng.chance(0.5)) e.carry.push({ item: "junk", count: 2 + rng.int(4) });
-    if (rng.chance(0.25)) e.carry.push({ item: "circuit", count: 1 + rng.int(2) });
-    if (rng.chance(0.06)) e.carry.push({ item: "precision", count: 1 });
-    e.carry.push({ item: "money", count: (10 + rng.int(60)) * 10 });
-    actors.push(e);
-  };
-
-  const anchors: Vec[] = [];
-  const pickSpot = (area: [number, number, number, number], minFromStart: number, minFromAnchors: number): Vec => {
-    const inArea = freeCells.filter((i) => {
-      const x = (i % W) / map.w, y = ((i / W) | 0) / map.h;
-      return x >= area[0] && x <= area[2] && y >= area[1] && y <= area[3];
-    });
-    for (let d = minFromAnchors; d >= 10; d -= 10) {
-      for (let tries = 0; tries < 300; tries++) {
-        const p = cellPos(rng.pick(inArea));
-        if (dist(p, startPos) < minFromStart) continue;
-        if (anchors.some((o) => dist(p, o) < d)) continue;
-        return p;
-      }
-    }
-    return cellPos(rng.pick(inArea));
-  };
-
-  let groupId = 0;
-  for (const spec of ENEMY_SPAWNS) {
-    for (const members of spec.groups) {
-      const center = pickSpot(layout.factionAreas[String(spec.faction)] ?? [0, 0, 1, 1], 80, 45);
-      anchors.push(center);
-      const gid = groupId++;
-      const roam = rng.chance(ROAMING_GROUP_RATE);
-      for (const kind of members) {
-        let p = center;
-        for (let k = 0; k < 30; k++) {
-          const q = { x: center.x + rng.range(-4, 4), y: center.y + rng.range(-4, 4) };
-          if (!map.blockedAt(q.x, q.y) && map.los(center, q)) {
-            p = q;
-            break;
-          }
-        }
-        spawnEnemy(kind, spec.faction, p, gid, roam);
-      }
-    }
-  }
-  for (let s = 0; s < SOLO_COUNT; s++) {
-    const p = pickSpot([0, 0, 1, 1], 60, 35);
-    anchors.push(p);
-    spawnEnemy(rng.pick(SOLO_KINDS), SOLO_FACTION_BASE + s, p, 1000 + s, true);
-  }
-
-  const loot: Loot[] = [];
-  const lootAt = (p: Vec, d: number) => loot.some((l) => dist(l.pos, p) < d);
-  /** 箱が接している建物の用途に合わせた、出やすさの倍率 */
-  const tiltAt = (i: number) => {
-    const x = i % W, y = (i / W) | 0;
-    for (const [nx, ny] of [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]) {
-      const b = map.buildingAt(nx, ny);
-      if (b) return LOOT_TILT[BUILDING_USE[b]] ?? {};
-    }
-    return {};
-  };
-  const wallAngle = (i: number) => {
-    const x = i % W, y = (i / W) | 0;
-    if (isBuilding(x, y - 1) || isBuilding(x, y + 1)) return 0;
-    return Math.PI / 2;
-  };
-
-  for (let c = 0; c < BIN_CLUSTERS; c++) {
-    let center: number | null = null;
-    for (let tries = 0; tries < 200; tries++) {
-      const i = rng.pick(wallSideCells);
-      const p = cellPos(i);
-      if (dist(p, startPos) < 10 || loot.some((l) => l.kind === "bin" && dist(l.pos, p) < 28)) continue;
-      center = i;
-      break;
-    }
-    if (center === null) continue;
-    const n = 1 + pickWeighted(rng, BIN_CLUSTER_SIZE_WEIGHTS);
-    const cp = cellPos(center);
-    const near = wallSideCells.filter((i) => dist(cellPos(i), cp) < 7);
-    let placed = 0;
-    for (let tries = 0; tries < 60 && placed < n; tries++) {
-      const i = placed === 0 ? center : rng.pick(near);
-      const p = cellPos(i);
-      if (lootAt(p, 1.6)) continue;
-      const items: Stack[] = [];
-      const tilt = tiltAt(i);
-      for (let k = 0; k < BIN_ITEMS; k++) items.push(rollStack(rng, preferAmmo, tilt));
-      loot.push({ id: nextId++, pos: p, kind: "bin", items, opened: false, angle: wallAngle(i) });
-      placed++;
-    }
-  }
-
-  for (let g = 0; g < GROUND_ITEMS; g++) {
-    for (let tries = 0; tries < 50; tries++) {
-      const p = cellPos(rng.pick(freeCells));
-      p.x += rng.range(-0.3, 0.3);
-      p.y += rng.range(-0.3, 0.3);
-      if (dist(p, startPos) < 6 || lootAt(p, 4)) continue;
-      loot.push({ id: nextId++, pos: p, kind: "ground", items: [rollStack(rng, preferAmmo)], opened: true, angle: rng.range(0, Math.PI) });
-      break;
-    }
-  }
-
   const bag = makeBag(loadout.bagSlots);
   for (const [k, v] of loadout.startItems) bagAdd(bag, k, v);
 
-  // 敵と箱を置いた後に出す。パートナーの有無で敵と箱の並びが変わらないように
-  for (const { index, model } of loadout.partners) {
-    const slot = PARTNER_SLOTS[index % PARTNER_SLOTS.length];
-    const ang = player.facing + (slot.angle * Math.PI) / 180;
-    const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist);
-    actors.push(makePartner(nextId++, index, model, pos));
-  }
-
-  return {
+  const w: World = {
     map, rng, seed,
     time: 0, tick: 0,
     actors, player,
-    bullets: [], grenades: [], fires: [], barriers: [], rails: [], healMarks: [], loot, lootVersion: 1, bag,
+    bullets: [], grenades: [], fires: [], barriers: [], rails: [], healMarks: [], loot: [], lootVersion: 1, bag,
     extracts,
     events: [],
     outcome: "playing",
@@ -574,5 +444,21 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     focus: null,
     debug: { sightLevel: 3, beaconLevel: 1 },
     nextId,
+    startPos,
+    preferAmmo,
+    spawned: new Map(),
+    memory: new Map(),
+    nextGroup: 0,
+    nextSolo: 0,
   };
+  syncSpawns(w);
+
+  // 敵と箱を置いた後に出す。パートナーの有無で敵と箱の並びが変わらないように
+  for (const { index, model } of loadout.partners) {
+    const slot = PARTNER_SLOTS[index % PARTNER_SLOTS.length];
+    const ang = player.facing + (slot.angle * Math.PI) / 180;
+    const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist) ?? startPos;
+    w.actors.push(makePartner(w.nextId++, index, model, pos));
+  }
+  return w;
 }
