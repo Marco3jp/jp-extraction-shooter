@@ -1,24 +1,38 @@
-import type { ChunkJson, MapIndex } from "./sim/map";
+import type { LoadedChunk, MapIndex } from "./sim/map";
 
-async function readJson<T>(res: Response): Promise<T> {
+export function mapBase(id: string) {
+  return `${import.meta.env.BASE_URL}maps/${id}/`;
+}
+
+export async function fetchIndex(id: string): Promise<MapIndex> {
+  const res = await fetch(`${mapBase(id)}index.json`);
   if (!res.ok) throw new Error(`${res.url}: ${res.status}`);
-  const buf = new Uint8Array(await res.arrayBuffer());
-  // サーバーが Content-Encoding: gzip で返すと、ブラウザが先に展開している
-  if (buf[0] !== 0x1f || buf[1] !== 0x8b) return JSON.parse(new TextDecoder().decode(buf)) as T;
-  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text()) as T;
+  return (await res.json()) as MapIndex;
 }
 
-export function mapBase(name: string) {
-  return `${import.meta.env.BASE_URL}maps/${name}/`;
-}
+/** 区画のファイルを Web Worker で読む */
+export class ChunkLoader {
+  private worker = new Worker(new URL("./chunkworker.ts", import.meta.url), { type: "module" });
+  private nextId = 1;
+  private waiting = new Map<number, { resolve: (c: LoadedChunk) => void; reject: (e: Error) => void }>();
 
-export async function fetchIndex(name: string): Promise<MapIndex> {
-  return readJson<MapIndex>(await fetch(`${mapBase(name)}index.json`));
-}
+  constructor(private id: string) {
+    this.worker.onmessage = (e: MessageEvent<{ id: number; chunk?: LoadedChunk; error?: string }>) => {
+      const w = this.waiting.get(e.data.id);
+      if (!w) return;
+      this.waiting.delete(e.data.id);
+      if (e.data.chunk) w.resolve(e.data.chunk);
+      else w.reject(new Error(e.data.error));
+    };
+  }
 
-export async function fetchChunk(name: string, i: number, j: number): Promise<ChunkJson> {
-  return readJson<ChunkJson>(await fetch(`${mapBase(name)}${i}_${j}.json.gz`));
+  load = (i: number, j: number): Promise<LoadedChunk> => {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.waiting.set(id, { resolve, reject });
+      this.worker.postMessage({ id, url: new URL(`${mapBase(this.id)}${i}_${j}.json.gz`, location.href).href });
+    });
+  };
 }
 
 const tiles = new Map<string, HTMLImageElement>();

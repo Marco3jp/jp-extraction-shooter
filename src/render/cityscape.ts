@@ -1,7 +1,7 @@
 // 街並みの描画：地面の表示、建物の種類ごとの部品、標識
 import * as THREE from "three";
 import type { BuildingType } from "../data/buildings";
-import { CHUNK, Ground, chunkOf, type ChunkJson, type GameMap, type MapBuilding, type Markings } from "../sim/map";
+import { CHUNK, Ground, chunkOf, type GameMap, type LoadedChunk, type MapBuilding, type Markings } from "../sim/map";
 
 type V3 = [number, number, number];
 
@@ -108,16 +108,34 @@ export class MeshBuilder {
   }
 }
 
-/** 区画の地面の模様と表示を描いたテクスチャを貼った板。道の縁は隣の区画のマスも見て決める */
-export function buildGround(map: GameMap, c: ChunkJson, anisotropy: number): THREE.Mesh {
-  const S = 4;
-  const W = CHUNK * S;
-  const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
+const GROUND_PX = 4;
+
+/** 区画の地面を描く板。区画を捨てても板とテクスチャは捨てず、次の区画に描き直して使う */
+export type GroundTile = { mesh: THREE.Mesh; tex: THREE.CanvasTexture; ctx: CanvasRenderingContext2D; img: ImageData };
+
+export function makeGroundTile(anisotropy: number): GroundTile {
+  const W = CHUNK * GROUND_PX;
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = W;
   const ctx = canvas.getContext("2d")!;
-  const img = ctx.createImageData(W, W);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = anisotropy;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(CHUNK, CHUNK), new THREE.MeshBasicMaterial({ map: tex }));
+  mesh.rotation.x = -Math.PI / 2;
+  return { mesh, tex, ctx, img: ctx.createImageData(W, W) };
+}
+
+/** 区画の地面の模様と表示を描く。道の縁は隣の区画のマスも見て決める */
+export function paintGround(map: GameMap, c: LoadedChunk, t: GroundTile) {
+  const S = GROUND_PX;
+  const W = CHUNK * S;
+  const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
+  const { ctx, img } = t;
   const data = img.data;
   for (let my = 0; my < CHUNK; my++) {
     for (let mx = 0; mx < CHUNK; mx++) {
@@ -144,20 +162,13 @@ export function buildGround(map: GameMap, c: ChunkJson, anisotropy: number): THR
     }
   }
   ctx.putImageData(img, 0, 0);
+  ctx.save();
   ctx.scale(S, S);
   ctx.translate(-x0, -y0);
   paintMarkings(ctx, c.markings);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = anisotropy;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(CHUNK, CHUNK), new THREE.MeshBasicMaterial({ map: tex }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.set(x0 + CHUNK / 2, 0, y0 + CHUNK / 2);
-  return ground;
+  ctx.restore();
+  t.tex.needsUpdate = true;
+  t.mesh.position.set(x0 + CHUNK / 2, 0, y0 + CHUNK / 2);
 }
 
 const PAINT = "rgba(232, 232, 226, 0.85)";
@@ -408,7 +419,7 @@ let roadTextMat: THREE.MeshBasicMaterial | null = null;
 let roadTextGeo: THREE.PlaneGeometry | null = null;
 
 /** 地面の「止まれ」。地面のテクスチャでは字が潰れるので、別の板に描いて貼る。区画の外の止まれは隣の区画が出す */
-export function buildRoadText(c: ChunkJson): THREE.Group {
+export function buildRoadText(c: LoadedChunk): THREE.Group {
   if (!roadTextMat || !roadTextGeo) {
     const cv = document.createElement("canvas");
     cv.width = 256;
@@ -468,7 +479,7 @@ function signTexture(lines: string[], kind: "street" | "station") {
 /** 通りの名前の案内標識と駅名標。板はカメラのほうへ傾けて、読めるようにする */
 let postMat: THREE.MeshLambertMaterial | null = null;
 
-export function buildSigns(c: ChunkJson, toCamera: THREE.Vector3): THREE.Group {
+export function buildSigns(c: LoadedChunk, toCamera: THREE.Vector3): THREE.Group {
   const group = new THREE.Group();
   postMat ??= new THREE.MeshLambertMaterial({ color: 0x8a8e94 });
   const tilt = Math.atan2(toCamera.y, toCamera.z);

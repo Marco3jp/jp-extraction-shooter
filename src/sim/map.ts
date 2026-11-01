@@ -137,6 +137,13 @@ export type Vec = { x: number; y: number };
 /** 通れるが避けたい場所。cellCost はそのセルに入るときに1歩あたりへ足す重み、lineOk はまっすぐ歩いてよい線分か */
 export type PathAvoid = { cellCost: (cx: number, cy: number) => number; lineOk: (a: Vec, b: Vec) => boolean };
 
+/** 格子をバイト列に展開した区画。Web Worker から移して渡せる */
+export type LoadedChunk = Omit<ChunkJson, "ground" | "solid" | "btype"> & { ground: Uint8Array; solid: Uint8Array; btype: Uint8Array };
+
+export function decodeChunk(c: ChunkJson): LoadedChunk {
+  return { ...c, ground: decode(c.ground), solid: decode(c.solid), btype: decode(c.btype) };
+}
+
 export const chunkKey = (i: number, j: number) => `${i}_${j}`;
 
 /** マス (cx, cy) がある区画の番号 */
@@ -149,7 +156,7 @@ export class GameMap {
   readonly h: number;
   readonly index: MapIndex;
   /** 読み込んである区画 */
-  readonly chunks = new Map<string, ChunkJson>();
+  readonly chunks = new Map<string, LoadedChunk>();
   /** 区画が変わるたびに増える。描画が作り直すかを決める */
   version = 0;
 
@@ -193,10 +200,10 @@ export class GameMap {
   }
 
   /** 区画を格子に書き込む。同じ置き場所に別の区画があれば、それを捨てる */
-  addChunk(c: ChunkJson) {
+  addChunk(c: LoadedChunk) {
     const s = this.slot(c.i, c.j);
     if (!Number.isNaN(this.slotI[s])) this.removeChunk(this.slotI[s], this.slotJ[s]);
-    const ground = decode(c.ground), solid = decode(c.solid), btype = decode(c.btype);
+    const { ground, solid, btype } = c;
     const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
     for (let y = 0; y < CHUNK; y++) {
       const row = ((y0 + y) & RING_MASK) * RING + (x0 & RING_MASK);

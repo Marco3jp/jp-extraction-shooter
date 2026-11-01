@@ -7,7 +7,8 @@ import { Renderer } from "./render/renderer";
 import { DEATH_LOSES_RUN_LOOT, DT, MATERIALS, type MaterialId } from "./sim/data";
 import { bagCount } from "./sim/inventory";
 import { GameMap } from "./sim/map";
-import { fetchChunk, fetchIndex } from "./maploader";
+import { ChunkLoader, fetchIndex } from "./maploader";
+import { ChunkStreamer } from "./stream";
 import { nearestLoot, step } from "./sim/sim";
 import { LOOT_PANEL_RANGE } from "./sim/data";
 import { createWorld, type World } from "./sim/world";
@@ -22,7 +23,7 @@ type Mode = "hub" | "playing" | "paused" | "ending";
 
 async function main() {
   const map = new GameMap(await fetchIndex("akihabara"));
-  for (const c of await Promise.all(map.index.chunks.map(([i, j]) => fetchChunk("akihabara", i, j)))) map.addChunk(c);
+  const streamer = new ChunkStreamer(map, new ChunkLoader(map.index.id).load);
   const app = document.getElementById("app")!;
   const hubEl = document.getElementById("hub")!;
   const overlay = document.getElementById("overlay")!;
@@ -33,6 +34,8 @@ async function main() {
 
   let profile: Profile = (await loadProfile()) ?? defaultProfile();
   let lastResult: LastRunSummary | null = null;
+  const startOf = () => campOn(profile, map.name) ?? { x: map.index.layout.start[0] * map.w, y: map.index.layout.start[1] * map.h };
+  await streamer.loadAround(startOf());
   let world: World = createWorld(map, 1, makeRunLoadout(profile));
   const hud = new Hud(world, mapView);
   hud.onCommand = (c) => input.command(c);
@@ -134,7 +137,12 @@ async function main() {
     showOverlay(null);
   };
 
-  function deploy() {
+  let deploying = false;
+  async function deploy() {
+    if (deploying) return;
+    deploying = true;
+    await streamer.loadAround(startOf());
+    deploying = false;
     world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile), campOn(profile, map.name) ?? undefined);
     renderer.reset();
     hud.reset(world);
@@ -244,6 +252,7 @@ async function main() {
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
     if (mode === "playing") {
+      streamer.update(world.player.pos, world.player.vel);
       acc += dt;
       let steps = 0;
       while (acc >= DT && steps < 5) {

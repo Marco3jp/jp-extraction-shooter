@@ -3,14 +3,19 @@ import {
   BEACON_RADIUS, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
 } from "../sim/data";
 import { weapon, isMoving } from "../sim/combat";
-import { Solid, chunkKey, type ChunkJson, type GameMap, type Vec } from "../sim/map";
-import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, disposeChunk, hash } from "./cityscape";
+import { CHUNK, Solid, chunkKey, type GameMap, type LoadedChunk, type Vec } from "../sim/map";
+import { MeshBuilder, addBuilding, buildRoadText, buildSigns, disposeChunk, hash, makeGroundTile, paintGround, type GroundTile } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
 import { BARRIER, DT, FRAG, HEAL_SENSE, THERMITE, type ThrowableId } from "../sim/data";
 import type { Actor, Extract, GameEvent, Loot, World } from "../sim/world";
 
 const CAM_OFFSET = new THREE.Vector3(0, 56, 36);
+/** この距離（m）以内にかかる区画を描き、RENDER_DROP より遠くなったら片付ける */
+const RENDER_RANGE = 256;
+const RENDER_DROP = 320;
+/** 歩いているうちに入ってくる区画は、1フレームにこの数だけ作る。出撃の直後は全部作る */
+const CHUNK_BUILDS_PER_FRAME = 2;
 const GUN_Y = 1.0;
 
 /** 呼んでいない・迎えを待っている・迎えが来ている */
@@ -176,8 +181,11 @@ export class Renderer {
   private overshieldRing!: THREE.Mesh;
 
   private map: GameMap;
-  private chunkViews = new Map<string, THREE.Group>();
+  private chunkViews = new Map<string, { chunk: LoadedChunk; group: THREE.Group; ground: GroundTile }>();
+  private groundPool: GroundTile[] = [];
   private chunkVersion = -1;
+  private knownChunks = new Set<string>();
+  private buildAll = true;
 
   constructor(container: HTMLElement, map: GameMap) {
     this.gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -467,47 +475,51 @@ export class Renderer {
     this.overshieldRing.position.set(px, 0.9 + Math.sin(this.time * 4) * 0.08, py);
   }
 
-  /** 読み込んである区画と、描いている区画を揃える */
-  private syncChunks() {
+  /** プレイヤーの近くの区画を描き、離れた区画を片付ける。1フレームで作るのは CHUNK_BUILDS_PER_FRAME 個まで */
+  private syncChunks(px: number, py: number) {
     const map = this.map;
-    if (this.chunkVersion === map.version) return;
-    this.chunkVersion = map.version;
-    for (const [key, g] of this.chunkViews) {
-      if (map.chunks.has(key)) continue;
-      this.scene.remove(g);
-      disposeChunk(g, this.buildingMat);
+    const dist = (c: { i: number; j: number }) => {
+      const dx = Math.max(c.i * CHUNK - px, 0, px - (c.i + 1) * CHUNK);
+      const dy = Math.max(c.j * CHUNK - py, 0, py - (c.j + 1) * CHUNK);
+      return Math.hypot(dx, dy);
+    };
+    for (const [key, v] of this.chunkViews) {
+      const c = map.chunks.get(key);
+      if (c && c === v.chunk && dist(c) <= RENDER_DROP) continue;
+      this.scene.remove(v.group, v.ground.mesh);
+      disposeChunk(v.group, this.buildingMat);
+      this.groundPool.push(v.ground);
       this.chunkViews.delete(key);
     }
-    const added: ChunkJson[] = [];
-    for (const [key, c] of map.chunks) {
-      if (this.chunkViews.has(key)) continue;
-      const g = new THREE.Group();
-      g.add(buildSigns(c, CAM_OFFSET.clone().normalize()), buildRoadText(c), this.buildStructures(c));
-      this.scene.add(g);
-      this.chunkViews.set(key, g);
-      added.push(c);
-    }
-    // 地面は道の縁を隣の区画のマスで決めるので、隣が来たら描き直す
-    const repaint = new Set<string>();
-    for (const c of added) {
-      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) repaint.add(chunkKey(c.i + di, c.j + dj));
-    }
-    for (const key of repaint) {
-      const c = map.chunks.get(key);
-      const g = this.chunkViews.get(key);
-      if (!c || !g) continue;
-      const old = g.getObjectByName("ground");
-      if (old) {
-        g.remove(old);
-        disposeChunk(old, this.buildingMat);
+    // 地面は道の縁を隣の区画のマスで決めるので、隣の区画が来たら描き直す
+    if (this.chunkVersion !== map.version) {
+      this.chunkVersion = map.version;
+      for (const key of map.chunks.keys()) {
+        if (this.knownChunks.has(key)) continue;
+        const c = map.chunks.get(key)!;
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const v = this.chunkViews.get(chunkKey(c.i + di, c.j + dj));
+            if (v && v.chunk !== c) paintGround(map, v.chunk, v.ground);
+          }
+        }
       }
-      const ground = buildGround(map, c, this.gl.capabilities.getMaxAnisotropy());
-      ground.name = "ground";
-      g.add(ground);
+      this.knownChunks = new Set(map.chunks.keys());
     }
+    const todo = [...map.chunks.values()].filter((c) => !this.chunkViews.has(chunkKey(c.i, c.j)) && dist(c) <= RENDER_RANGE);
+    todo.sort((a, b) => dist(a) - dist(b));
+    for (const c of todo.slice(0, this.buildAll ? todo.length : CHUNK_BUILDS_PER_FRAME)) {
+      const group = new THREE.Group();
+      group.add(buildSigns(c, CAM_OFFSET.clone().normalize()), buildRoadText(c), this.buildStructures(c));
+      const ground = this.groundPool.pop() ?? makeGroundTile(this.gl.capabilities.getMaxAnisotropy());
+      paintGround(map, c, ground);
+      this.scene.add(group, ground.mesh);
+      this.chunkViews.set(chunkKey(c.i, c.j), { chunk: c, group, ground });
+    }
+    this.buildAll = false;
   }
 
-  private buildStructures(chunk: ChunkJson) {
+  private buildStructures(chunk: LoadedChunk) {
     const mb = new MeshBuilder();
     for (const b of chunk.buildings) addBuilding(mb, b);
 
@@ -569,6 +581,7 @@ export class Renderer {
     this.particles = [];
     this.camInit = false;
     this.lootVersion = -1;
+    this.buildAll = true;
     for (const sw of this.shockwaves) this.scene.remove(sw.mesh);
     this.shockwaves = [];
   }
@@ -816,10 +829,10 @@ export class Renderer {
 
   render(w: World, alpha: number, aim: Vec, frameDt: number, throwPreview: ThrowableId | null = null) {
     this.time += frameDt;
-    this.syncChunks();
     const p = w.player;
     const px = p.prev.x + (p.pos.x - p.prev.x) * alpha;
     const py = p.prev.y + (p.pos.y - p.prev.y) * alpha;
+    this.syncChunks(px, py);
 
     let lx = aim.x - px, ly = aim.y - py;
     const ll = Math.hypot(lx, ly);

@@ -10,7 +10,8 @@ import { buffsOf } from "../src/sim/buffs";
 import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
-import { GameMap, type ChunkJson, type MapIndex } from "../src/sim/map";
+import { CHUNK, GameMap, decodeChunk, type ChunkJson, type MapIndex } from "../src/sim/map";
+import { ChunkStreamer } from "../src/stream";
 import { Rng } from "../src/sim/rng";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
@@ -21,10 +22,11 @@ import type { WeaponType } from "../src/data/weapons";
 const baseLoadout = makeRunLoadout(defaultProfile());
 
 const MAP_DIR = "public/maps/akihabara";
-const map = new GameMap(JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as MapIndex);
-for (const [i, j] of map.index.chunks) {
-  map.addChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
-}
+const mapIndex = JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as MapIndex;
+const readChunk = (i: number, j: number) =>
+  decodeChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
+const map = new GameMap(mapIndex);
+for (const [i, j] of map.index.chunks) map.addChunk(readChunk(i, j));
 
 // 漁れる物の量
 {
@@ -890,4 +892,59 @@ const rich = (): Profile => {
       `パートナーを起こす: 倒れてもランは続く ${downed}、2秒押して ${half.toFixed(2)}秒分、撃たれたら ${reset.toFixed(2)} に戻る、そこから立ち上がるまで ${(w.time - t1).toFixed(2)}秒（必要 ${PARTNER_REVIVE.time}秒）、立ち上がったヘルス ${a.health}`,
     );
   }
+}
+
+// 区画を出し入れしながら走る。秋葉原は狭いので、読む距離を縮めて捨てる所まで通す
+{
+  const m = new GameMap(mapIndex);
+  const streamer = new ChunkStreamer(m, (i, j) => Promise.resolve(readChunk(i, j)), { load: 160, drop: 240, lookahead: 8 });
+  const start = { x: 20, y: 20 };
+  await streamer.loadAround(start);
+  const w = createWorld(m, 3, baseLoadout, start);
+  for (const a of w.actors) if (a !== w.player) a.alive = false;
+  // マップを左右に往復しながら下へ進む。12m/s（自転車の速さの見当）
+  const speed = 12;
+  const legs: Vec[] = [];
+  for (let y = 20, k = 0; y < m.h - 20; y += 110, k++) legs.push({ x: k % 2 ? m.w - 20 : 20, y }, { x: k % 2 ? 20 : m.w - 20, y });
+  let leg = 0, ticks = 0, worst = 0, total = 0, missing = 0, maxLoaded = 0;
+  // 建物に押し戻されないよう、自分で進めた位置に毎ティック置き直す
+  const at = { ...start };
+  while (leg < legs.length) {
+    const p = w.player;
+    const to = legs[leg];
+    const d = Math.hypot(to.x - at.x, to.y - at.y);
+    const v = d < 1e-6 ? { x: 0, y: 0 } : { x: ((to.x - at.x) / d) * speed, y: ((to.y - at.y) / d) * speed };
+    if (d <= speed * DT) {
+      at.x = to.x;
+      at.y = to.y;
+      leg++;
+    } else {
+      at.x += v.x * DT;
+      at.y += v.y * DT;
+    }
+    p.pos = { ...at };
+    p.vel = v;
+    const s = performance.now();
+    streamer.update(p.pos, p.vel);
+    step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+    const ms = performance.now() - s;
+    total += ms;
+    worst = Math.max(worst, ms);
+    ticks++;
+    maxLoaded = Math.max(maxLoaded, m.chunks.size);
+    // 届いた区画を次のティックまでに受け取る
+    await Promise.resolve();
+    // プレイヤーのいる区画とその周りが読めているか
+    const ci = Math.floor(p.pos.x / CHUNK), cj = Math.floor(p.pos.y / CHUNK);
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        const i = ci + di, j = cj + dj;
+        if (mapIndex.chunks.some(([a, b]) => a === i && b === j) && !m.hasChunk(i, j)) missing++;
+      }
+    }
+  }
+  console.log(
+    `区画の出し入れ（読む 160m・捨てる 240m）: ${ticks}ティック 読んだ ${streamer.loads}回 捨てた ${streamer.drops}回 同時に持った区画 最大 ${maxLoaded}/${mapIndex.chunks.length}、`
+      + `周りの区画が間に合わなかった回数 ${missing}　1ティック平均 ${(total / ticks).toFixed(3)}ms 最大 ${worst.toFixed(2)}ms`,
+  );
 }
