@@ -1,5 +1,6 @@
 import type { MaterialId } from "../../data/items";
 import type { Profile } from "../../meta/profile";
+import type { MapView } from "../../mapview";
 import type { GameMap, Vec } from "../../sim/map";
 
 /** 直前のランの結果。拠点に戻ったときに一度だけ見せる */
@@ -20,7 +21,7 @@ export type HubProps = {
   lastResult: LastRunSummary | null;
   map: GameMap;
   /** 1m を1ピクセルにしたマップ全体の絵 */
-  mapImage: HTMLCanvasElement;
+  mapView: MapView;
   /** profile の複製を書き換えてから渡す。呼んだ側で保存して再描画する */
   onChange: (next: Profile) => void;
   onDeploy: () => void;

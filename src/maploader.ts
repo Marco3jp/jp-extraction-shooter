@@ -20,3 +20,17 @@ export async function fetchIndex(name: string): Promise<MapIndex> {
 export async function fetchChunk(name: string, i: number, j: number): Promise<ChunkJson> {
   return readJson<ChunkJson>(await fetch(`${mapBase(name)}${i}_${j}.json.gz`));
 }
+
+const tiles = new Map<string, HTMLImageElement>();
+
+/** 全体マップの絵の1枚。初めて呼んだときに読み始め、読み終わるまでは complete が false */
+export function overviewTile(id: string, ti: number, tj: number): HTMLImageElement {
+  const key = `${id}/${ti}_${tj}`;
+  let img = tiles.get(key);
+  if (!img) {
+    img = new Image();
+    img.src = `${mapBase(id)}overview/${ti}_${tj}.png`;
+    tiles.set(key, img);
+  }
+  return img;
+}

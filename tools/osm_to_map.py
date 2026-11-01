@@ -684,6 +684,58 @@ CHUNK = 128
 PAINT_MARGIN = 8
 # マップの外のマス。src/sim/map.ts の Ground.outside と揃える
 OUTSIDE = 255
+# 全体マップの絵の1枚の一辺（m）。1m を1ピクセルで描く。src/mapview.ts の OVERVIEW_TILE と揃える
+OVERVIEW_TILE = 512
+# 全体マップの色。地面は src/render/cityscape.ts の GROUND_COLORS を暗くしたもの
+OVERVIEW_BUILDING = (150, 144, 132)
+OVERVIEW_COVER = (190, 170, 110)
+OVERVIEW_GROUND = {
+    LOT: (138, 136, 128), ROAD: (58, 60, 66), SIDEWALK: (170, 165, 155),
+    GREEN: (86, 128, 74), VIADUCT: (92, 84, 76), DIRT: (150, 124, 92),
+}
+
+
+def png_rgba(w, h, rows):
+    """rows は1行ずつの RGBA のバイト列"""
+    def chunk(tag, body):
+        c = struct.pack(">I", len(body)) + tag + body
+        return c + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + r for r in rows)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def write_overview(out_dir, W, H, ground, solid):
+    """全体マップ用の絵を OVERVIEW_TILE 四方ずつ書き出す。マップの外は透明にする"""
+    d = os.path.join(out_dir, "overview")
+    os.makedirs(d, exist_ok=True)
+    for f in os.listdir(d):
+        if f.endswith(".png"):
+            os.remove(os.path.join(d, f))
+    colors = {k: (round(r * 0.4 + 10), round(g * 0.4 + 10), round(b * 0.4 + 14)) for k, (r, g, b) in OVERVIEW_GROUND.items()}
+    tiles = []
+    for tj in range((H + OVERVIEW_TILE - 1) // OVERVIEW_TILE):
+        for ti in range((W + OVERVIEW_TILE - 1) // OVERVIEW_TILE):
+            rows = []
+            for y in range(tj * OVERVIEW_TILE, (tj + 1) * OVERVIEW_TILE):
+                row = bytearray()
+                for x in range(ti * OVERVIEW_TILE, (ti + 1) * OVERVIEW_TILE):
+                    if x >= W or y >= H:
+                        row += b"\x00\x00\x00\x00"
+                        continue
+                    if solid[y][x] == BUILDING:
+                        c = OVERVIEW_BUILDING
+                    elif solid[y][x] == COVER:
+                        c = OVERVIEW_COVER
+                    else:
+                        c = colors[ground[y][x]]
+                    row += bytes((*c, 255))
+                rows.append(bytes(row))
+            with open(os.path.join(d, f"{ti}_{tj}.png"), "wb") as f:
+                f.write(png_rgba(OVERVIEW_TILE, OVERVIEW_TILE, rows))
+            tiles.append([ti, tj])
+    return tiles
 
 
 def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
@@ -755,12 +807,14 @@ def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
             sizes.append(len(data))
             chunks.append([i, j])
     index = dict(
+        id=os.path.basename(os.path.normpath(out_dir)),
         name=cfg["name"],
         width=W, height=H, chunk=CHUNK,
         attribution="© OpenStreetMap contributors (ODbL)",
         layout=cfg["layout"],
         areas=features["areas"],
         chunks=chunks,
+        overview=dict(tile=OVERVIEW_TILE, tiles=write_overview(out_dir, W, H, ground, solid)),
     )
     with open(os.path.join(out_dir, "index.json"), "w") as f:
         json.dump(index, f, ensure_ascii=False, separators=(",", ":"))

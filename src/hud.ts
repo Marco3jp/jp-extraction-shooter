@@ -87,8 +87,8 @@ export class Hud {
   bigMap = false;
   onCommand: (c: Command) => void = () => {};
 
-  constructor(world: World) {
-    this.mapView = new MapView(world.map);
+  constructor(world: World, mapView: MapView) {
+    this.mapView = mapView;
     const items = $("#items");
     for (const [kind, key] of HEAL_ORDER) {
       const d = document.createElement("div");
@@ -161,7 +161,6 @@ export class Hud {
 
   reset(world: World) {
     this.buildKit(world);
-    this.mapView = new MapView(world.map);
     this.pings = [];
     this.lastPing.clear();
     this.feed = [];

@@ -29,12 +29,12 @@ async function main() {
   const renderer = new Renderer(app, map);
   const input = new InputState(app);
   const sfx = new Sfx();
-  const mapImage = new MapView(map).base;
+  const mapView = new MapView(map);
 
   let profile: Profile = (await loadProfile()) ?? defaultProfile();
   let lastResult: LastRunSummary | null = null;
   let world: World = createWorld(map, 1, makeRunLoadout(profile));
-  const hud = new Hud(world);
+  const hud = new Hud(world, mapView);
   hud.onCommand = (c) => input.command(c);
   let mode: Mode = "hub";
   let acc = 0;
@@ -74,7 +74,7 @@ async function main() {
       profile,
       lastResult,
       map,
-      mapImage,
+      mapView,
       onChange: (next) => {
         profile = next;
         persist();

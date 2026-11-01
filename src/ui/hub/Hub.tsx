@@ -50,7 +50,7 @@ export function Hub(props: HubProps) {
         {props.lastResult?.extractAt && (
           <CampPicker
             map={props.map}
-            mapImage={props.mapImage}
+            mapView={props.mapView}
             profile={profile}
             center={props.lastResult.extractAt}
             onChange={props.onChange}

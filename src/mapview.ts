@@ -1,8 +1,8 @@
 import { BEACON_RADIUS, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
-import { Solid, type GameMap, type Vec } from "./sim/map";
+import type { GameMap, Vec } from "./sim/map";
 import type { Actor, Extract, World } from "./sim/world";
 import { PARTNER_COLOR, TYPE_COLORS, extractColor } from "./render/renderer";
-import { GROUND_COLORS } from "./render/cityscape";
+import { overviewTile } from "./maploader";
 
 export type Ping = { pos: Vec; t: number };
 
@@ -19,32 +19,43 @@ function enemyColor(a: Actor): string | null {
 }
 
 export class MapView {
-  /** 1m を1ピクセルにしたマップ全体の絵 */
-  readonly base: HTMLCanvasElement;
+  private tiles: Set<string>;
 
   constructor(private map: GameMap) {
-    const c = document.createElement("canvas");
-    c.width = map.w;
-    c.height = map.h;
-    const ctx = c.getContext("2d")!;
-    const img = ctx.createImageData(map.w, map.h);
-    for (let i = 0; i < map.w * map.h; i++) {
-      const x = i % map.w, y = (i / map.w) | 0;
-      const solid = map.solidAt(x, y);
-      let r: number, g: number, b: number;
-      if (solid === Solid.building) [r, g, b] = [150, 144, 132];
-      else if (solid === Solid.cover) [r, g, b] = [190, 170, 110];
-      else {
-        const gc = GROUND_COLORS[map.groundAt(x, y)] ?? GROUND_COLORS[0];
-        [r, g, b] = [gc[0] * 0.4 + 10, gc[1] * 0.4 + 10, gc[2] * 0.4 + 14];
+    this.tiles = new Set(map.index.overview.tiles.map(([i, j]) => `${i}_${j}`));
+  }
+
+  /** マップの (ox, oy) から meters 四方を、ctx の (0, 0) から size 四方へ描く。読み終わっていない絵は飛ばす */
+  drawArea(ctx: CanvasRenderingContext2D, ox: number, oy: number, meters: number, size: number) {
+    this.drawRect(ctx, ox, oy, meters, meters, 0, 0, size / meters);
+  }
+
+  /** 範囲の絵を読み終えたら解決する。読めなかった絵は飛ばす */
+  loadArea(ox: number, oy: number, meters: number): Promise<void> {
+    const T = this.map.index.overview.tile;
+    const waits: Promise<void>[] = [];
+    for (let tj = Math.floor(oy / T); tj * T < oy + meters; tj++) {
+      for (let ti = Math.floor(ox / T); ti * T < ox + meters; ti++) {
+        if (this.tiles.has(`${ti}_${tj}`)) waits.push(overviewTile(this.map.index.id, ti, tj).decode().catch(() => {}));
       }
-      img.data[i * 4] = r;
-      img.data[i * 4 + 1] = g;
-      img.data[i * 4 + 2] = b;
-      img.data[i * 4 + 3] = 255;
     }
-    ctx.putImageData(img, 0, 0);
-    this.base = c;
+    return Promise.all(waits).then(() => {});
+  }
+
+  private drawRect(ctx: CanvasRenderingContext2D, ox: number, oy: number, mw: number, mh: number, dx: number, dy: number, scale: number) {
+    const T = this.map.index.overview.tile;
+    ctx.imageSmoothingEnabled = false;
+    for (let tj = Math.floor(oy / T); tj * T < oy + mh; tj++) {
+      for (let ti = Math.floor(ox / T); ti * T < ox + mw; ti++) {
+        if (!this.tiles.has(`${ti}_${tj}`)) continue;
+        const img = overviewTile(this.map.index.id, ti, tj);
+        if (!img.complete || !img.naturalWidth) continue;
+        // 絵の外を指すと描かないブラウザがあるので、重なる所だけを切り出す
+        const x0 = Math.max(ox, ti * T), y0 = Math.max(oy, tj * T);
+        const x1 = Math.min(ox + mw, (ti + 1) * T), y1 = Math.min(oy + mh, (tj + 1) * T);
+        ctx.drawImage(img, x0 - ti * T, y0 - tj * T, x1 - x0, y1 - y0, dx + (x0 - ox) * scale, dy + (y0 - oy) * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+      }
+    }
   }
 
   /** プレイヤーを中心にした小さい地図 */
@@ -56,8 +67,7 @@ export class MapView {
     const ox = p.x - MINI_METERS / 2, oy = p.y - MINI_METERS / 2;
     ctx.fillStyle = "#15171b";
     ctx.fillRect(0, 0, size, size);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.base, ox, oy, MINI_METERS, MINI_METERS, 0, 0, size, size);
+    this.drawArea(ctx, ox, oy, MINI_METERS, size);
     const toS = (v: Vec) => ({ x: (v.x - ox) * scale, y: (v.y - oy) * scale });
     this.drawMarkers(ctx, w, pings, toS, scale, size, true);
   }
@@ -69,8 +79,7 @@ export class MapView {
     const scale = Math.min(cw / this.map.w, ch / this.map.h);
     const offX = (cw - this.map.w * scale) / 2, offY = (ch - this.map.h * scale) / 2;
     ctx.clearRect(0, 0, cw, ch);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.base, offX, offY, this.map.w * scale, this.map.h * scale);
+    this.drawRect(ctx, 0, 0, this.map.w, this.map.h, offX, offY, scale);
     const toS = (v: Vec) => ({ x: offX + v.x * scale, y: offY + v.y * scale });
     this.drawMarkers(ctx, w, pings, toS, scale, Math.max(cw, ch), false);
   }

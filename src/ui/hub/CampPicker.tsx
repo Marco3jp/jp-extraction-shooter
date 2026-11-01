@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { CAMP_RADIUS } from "../../data/constants";
 import { campOn, type Profile } from "../../meta/profile";
+import type { MapView } from "../../mapview";
 import type { GameMap, Vec } from "../../sim/map";
 
 const SIZE = 340;
@@ -9,7 +10,7 @@ const VIEW = CAMP_RADIUS * 2 + 40;
 
 type Props = {
   map: GameMap;
-  mapImage: HTMLCanvasElement;
+  mapView: MapView;
   profile: Profile;
   /** 脱出した地点 */
   center: Vec;
@@ -17,9 +18,10 @@ type Props = {
 };
 
 /** 脱出した地点の周りをクリックして、キャンプを置く */
-export function CampPicker({ map, mapImage, profile, center, onChange }: Props) {
+export function CampPicker({ map, mapView, profile, center, onChange }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<Vec | null>(null);
+  const [, setLoaded] = useState(0);
   const camp = campOn(profile, map.name);
   const ox = center.x - VIEW / 2, oy = center.y - VIEW / 2;
   const scale = SIZE / VIEW;
@@ -30,11 +32,14 @@ export function CampPicker({ map, mapImage, profile, center, onChange }: Props) 
   const placeable = (v: Vec) => Math.hypot(v.x - center.x, v.y - center.y) <= CAMP_RADIUS && map.walkable(v.x, v.y);
 
   useEffect(() => {
+    void mapView.loadArea(ox, oy, VIEW).then(() => setLoaded((n) => n + 1));
+  }, [mapView, ox, oy]);
+
+  useEffect(() => {
     const ctx = ref.current!.getContext("2d")!;
     ctx.fillStyle = "#15171b";
     ctx.fillRect(0, 0, SIZE, SIZE);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mapImage, ox, oy, VIEW, VIEW, 0, 0, SIZE, SIZE);
+    mapView.drawArea(ctx, ox, oy, VIEW, SIZE);
     const c = SIZE / 2, r = CAMP_RADIUS * scale;
     // 円の外を暗くする
     ctx.fillStyle = "rgba(0, 0, 0, 0.55)";

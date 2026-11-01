@@ -36,6 +36,8 @@ export type Markings = {
 
 /** public/maps/<名前>/index.json */
 export type MapIndex = {
+  /** public/maps/ の下のディレクトリ名 */
+  id: string;
   name: string;
   width: number;
   height: number;
@@ -52,6 +54,8 @@ export type MapIndex = {
   areas: { name: string; x: number; y: number }[];
   /** ファイルがある区画の番号 [i, j] */
   chunks: [number, number][];
+  /** 全体マップの絵。overview/<ti>_<tj>.png が tile 四方を 1m 1ピクセルで描いている。マップの外は透明 */
+  overview: { tile: number; tiles: [number, number][] };
 };
 
 /** public/maps/<名前>/<i>_<j>.json.gz。区画は x が i * CHUNK から、y が j * CHUNK から CHUNK 四方 */
