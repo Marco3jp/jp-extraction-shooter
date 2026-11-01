@@ -48,7 +48,7 @@ async function main() {
   const controls = `
     <table class="controls">
       <tr><td>WASD / Shift</td><td>移動 / 走る（撃つとやめる）</td></tr>
-      <tr><td>Ctrl</td><td>短距離ダッシュ（5秒に1回。回復は止まる）</td></tr>
+      <tr><td>スペース</td><td>短距離ダッシュ（5秒に1回。回復は止まる）</td></tr>
       <tr><td>G / T</td><td>押している間に落ちる場所を確かめて、離すと投げる（グレネード / テルミット）</td></tr>
       <tr><td>マウス / 左クリック</td><td>カーソルの方向へ撃つ</td></tr>
       <tr><td>R</td><td>リロード</td></tr>
@@ -210,7 +210,7 @@ async function main() {
     if (document.hidden) pause();
   });
   window.addEventListener("resize", () => renderer.resize());
-  // Ctrl+W（ダッシュしながら前進）でタブが閉じても、ランの途中なら確認を出す
+  // 誤って Ctrl+W などでタブを閉じかけても、ランの途中なら確認を出す
   window.addEventListener("beforeunload", (e) => {
     if (mode === "playing" || mode === "paused") e.preventDefault();
   });

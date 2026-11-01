@@ -1,6 +1,6 @@
 import { ATTACHMENTS, SLOT_ORDER, type AttachmentId, type SlotId } from "../data/attachments";
 import { DEATH_LOSES_RUN_LOOT, START_AMMO_MAGS, START_HEALS } from "../data/constants";
-import { ARMORS, BAGS, type ArmorId, type BagId } from "../data/gear";
+import { ARMORS, BAGS, SHOES, type ArmorId, type BagId, type ShoesId } from "../data/gear";
 import { ITEMS, MATERIALS, type ItemId, type MaterialId } from "../data/items";
 import { RECIPES, type Recipe } from "../data/recipes";
 import { WEAPON_TYPES, type WeaponDef, type WeaponType } from "../data/weapons";
@@ -21,7 +21,8 @@ export type Profile = {
   weaponConfig: Record<WeaponType, Partial<Record<SlotId, AttachmentId>>>;
   armors: ArmorId[];
   bags: BagId[];
-  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId };
+  shoes: ShoesId[];
+  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId };
   stats: { runs: number; extractions: number; deaths: number; kills: number };
 };
 
@@ -37,7 +38,8 @@ export function defaultProfile(): Profile {
     weaponConfig,
     armors: ["standard"],
     bags: ["standard"],
-    loadout: { weapons: ["ar", "pistol"], armor: "standard", bag: "standard" },
+    shoes: ["standard"],
+    loadout: { weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard" },
     stats: { runs: 0, extractions: 0, deaths: 0, kills: 0 },
   };
 }
@@ -119,6 +121,12 @@ export function setLoadoutBag(p: Profile, bag: BagId): boolean {
   return true;
 }
 
+export function setLoadoutShoes(p: Profile, shoes: ShoesId): boolean {
+  if (!p.shoes.includes(shoes)) return false;
+  p.loadout.shoes = shoes;
+  return true;
+}
+
 // ---- クラフト ----
 
 /** 作れない理由。作れるなら null */
@@ -127,6 +135,7 @@ export function craftBlocker(p: Profile, r: Recipe): string | null {
   if (o.kind === "weapon" && p.weapons.includes(o.id)) return "持っている";
   if (o.kind === "armor" && p.armors.includes(o.id)) return "持っている";
   if (o.kind === "bag" && p.bags.includes(o.id)) return "持っている";
+  if (o.kind === "shoes" && p.shoes.includes(o.id)) return "持っている";
   if (p.money < r.money) return "お金が足りない";
   for (const m of MATERIALS) if ((p.materials[m] ?? 0) < (r.materials[m] ?? 0)) return `${ITEMS[m].name}が足りない`;
   return null;
@@ -144,6 +153,7 @@ export function craft(p: Profile, recipeId: string): boolean {
     case "weapon": p.weapons.push(o.id); break;
     case "armor": p.armors.push(o.id); break;
     case "bag": p.bags.push(o.id); break;
+    case "shoes": p.shoes.push(o.id); break;
   }
   return true;
 }
@@ -167,7 +177,7 @@ export function makeRunLoadout(p: Profile): RunLoadout {
   return {
     weapons,
     shieldMax: armor.shield,
-    moveMul: armor.moveMul,
+    moveMul: armor.moveMul * SHOES[p.loadout.shoes].moveMul,
     bagSlots: BAGS[p.loadout.bag].slots,
     startItems,
   };

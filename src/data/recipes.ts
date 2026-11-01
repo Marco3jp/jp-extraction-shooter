@@ -1,5 +1,5 @@
 import type { AttachmentId } from "./attachments";
-import type { ArmorId, BagId } from "./gear";
+import type { ArmorId, BagId, ShoesId } from "./gear";
 import type { MaterialId } from "./items";
 import type { WeaponType } from "./weapons";
 
@@ -8,7 +8,8 @@ export type RecipeOutput =
   | { kind: "attachment"; id: AttachmentId }
   | { kind: "weapon"; id: WeaponType }
   | { kind: "armor"; id: ArmorId }
-  | { kind: "bag"; id: BagId };
+  | { kind: "bag"; id: BagId }
+  | { kind: "shoes"; id: ShoesId };
 
 export type RecipeCategory = "material" | "attachment" | "weapon" | "gear";
 
@@ -49,4 +50,6 @@ export const RECIPES: Recipe[] = [
   { id: "arm-heavy", category: "gear", output: { kind: "armor", id: "heavy" }, money: 4000, materials: { circuit: 8, precision: 3 } },
   { id: "bag-medium", category: "gear", output: { kind: "bag", id: "medium" }, money: 800, materials: { junk: 15, circuit: 2 } },
   { id: "bag-large", category: "gear", output: { kind: "bag", id: "large" }, money: 2500, materials: { circuit: 6, precision: 2 } },
+  { id: "shoes-light", category: "gear", output: { kind: "shoes", id: "light" }, money: 600, materials: { junk: 8, circuit: 1 } },
+  { id: "shoes-racing", category: "gear", output: { kind: "shoes", id: "racing" }, money: 2000, materials: { circuit: 4, precision: 1 } },
 ];

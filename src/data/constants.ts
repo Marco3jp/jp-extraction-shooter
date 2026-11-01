@@ -10,7 +10,7 @@ export const SPRINT_SPEED = 8.5;
 export const HEAL_MOVE_SPEED = 2.6;
 export const RELOAD_MOVE_SPEED = 5;
 export const SWAP_TIME = 0.45;
-/** Ctrl の短距離ダッシュ。数値は仮 */
+/** スペースキーの短距離ダッシュ。数値は仮 */
 export const DASH = { distance: 4.5, time: 0.16, cooldown: 5 };
 /** ダッシュをやめてから撃てるようになるまで */
 export const SPRINT_TO_FIRE = 0.15;

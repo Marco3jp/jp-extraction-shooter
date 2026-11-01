@@ -87,7 +87,7 @@ export class Hud {
     }
     const dash = document.createElement("div");
     dash.className = "item dash";
-    dash.innerHTML = `<span class="key">Ctrl</span><span class="name">ダッシュ</span><span class="count"></span><div class="cd"></div>`;
+    dash.innerHTML = `<span class="key">Space</span><span class="name">ダッシュ</span><span class="count"></span><div class="cd"></div>`;
     items.appendChild(dash);
     const inv = $("#inventory");
     inv.addEventListener("mousedown", (e) => e.stopPropagation());

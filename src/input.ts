@@ -29,13 +29,12 @@ export class InputState {
   constructor(target: HTMLElement) {
     window.addEventListener("keydown", (e) => {
       if (!this.enabled) return;
-      // Ctrl はダッシュに使うので、Ctrl+S などブラウザの操作に取られないようにする
-      if (["Tab", "Space", "ShiftLeft", "ShiftRight"].includes(e.code) || e.ctrlKey) e.preventDefault();
+      if (["Tab", "Space", "ShiftLeft", "ShiftRight"].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
       this.keys.add(e.code);
       switch (e.code) {
         case "KeyR": this.pending.reload = true; break;
-        case "ControlLeft": case "ControlRight": this.pending.dash = true; break;
+        case "Space": this.pending.dash = true; break;
         case "KeyG": this.aimingThrow = "frag"; break;
         case "KeyT": this.aimingThrow = "thermite"; break;
         case "Digit1": this.pending.swap = 0; break;

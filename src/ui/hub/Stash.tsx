@@ -1,5 +1,5 @@
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOTS } from "../../data/attachments";
-import { ARMORS, BAGS } from "../../data/gear";
+import { ARMORS, BAGS, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { WEAPON_BASES } from "../../data/weapons";
 import { attachmentsInUse, weaponAttachments, type Profile } from "../../meta/profile";
@@ -71,7 +71,7 @@ export function Stash({ profile }: { profile: Profile }) {
       </section>
 
       <section class="hub-panel">
-        <h2>防具・カバン</h2>
+        <h2>防具・カバン・靴</h2>
         <ul class="hub-list">
           {profile.armors.map((a) => {
             const move = formatMoveMul(ARMORS[a].moveMul);
@@ -89,6 +89,12 @@ export function Stash({ profile }: { profile: Profile }) {
             <li>
               <span>{BAGS[b].name}</span>
               <span class="muted">{BAGS[b].slots}枠</span>
+            </li>
+          ))}
+          {profile.shoes.map((s) => (
+            <li>
+              <span>{SHOES[s].name}</span>
+              <span class="muted">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
             </li>
           ))}
         </ul>

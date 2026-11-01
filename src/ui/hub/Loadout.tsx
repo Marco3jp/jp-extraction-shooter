@@ -1,14 +1,14 @@
 import { useState } from "preact/hooks";
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
 import { MIN_TTK } from "../../data/constants";
-import { ARMORS, BAGS } from "../../data/gear";
+import { ARMORS, BAGS, SHOES } from "../../data/gear";
 import { WEAPON_BASES, type WeaponDef, type WeaponStat, type WeaponType } from "../../data/weapons";
 import {
   attachmentsFree,
   profileWeapon,
   setAttachment,
   setLoadoutArmor,
-  setLoadoutBag,
+  setLoadoutBag, setLoadoutShoes,
   setLoadoutWeapon,
   type Profile,
 } from "../../meta/profile";
@@ -78,6 +78,20 @@ export function Loadout({ profile, onChange, onDeploy }: Props) {
               >
                 <span>{BAGS[b].name}</span>
                 <span class="hub-chip-sub">{BAGS[b].slots}枠</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">靴</div>
+          <div class="hub-chips">
+            {profile.shoes.map((s) => (
+              <button
+                class={`hub-chip${profile.loadout.shoes === s ? " selected" : ""}`}
+                onClick={() => update((p) => setLoadoutShoes(p, s))}
+              >
+                <span>{SHOES[s].name}</span>
+                <span class="hub-chip-sub">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
               </button>
             ))}
           </div>

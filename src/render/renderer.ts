@@ -401,7 +401,7 @@ export class Renderer {
         const mx = Math.floor(tx / S);
         const g = map.ground[mx + my * map.w];
         const c = GROUND_COLORS[g] ?? GROUND_COLORS[0];
-        const n = (hash(tx * 7.13 + ty * 3.71) - 0.5) * 10;
+        const n = 0;
         let edge = 0;
         if (g === Ground.road) {
           const i0 = mx + my * map.w;

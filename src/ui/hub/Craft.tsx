@@ -1,5 +1,5 @@
 import { ATTACHMENTS, SLOTS } from "../../data/attachments";
-import { ARMORS, BAGS } from "../../data/gear";
+import { ARMORS, BAGS, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { RECIPES, type Recipe, type RecipeCategory } from "../../data/recipes";
 import { WEAPON_BASES } from "../../data/weapons";
@@ -11,7 +11,7 @@ const CATEGORIES: { id: RecipeCategory; name: string }[] = [
   { id: "material", name: "素材" },
   { id: "attachment", name: "アタッチメント" },
   { id: "weapon", name: "武器" },
-  { id: "gear", name: "防具・カバン" },
+  { id: "gear", name: "防具・カバン・靴" },
 ];
 
 type Props = { profile: Profile; onChange: (next: Profile) => void };
@@ -94,6 +94,8 @@ function Output({ recipe }: { recipe: Recipe }) {
       return <span class="hub-recipe-name">{ARMORS[o.id].name}</span>;
     case "bag":
       return <span class="hub-recipe-name">{BAGS[o.id].name}</span>;
+    case "shoes":
+      return <span class="hub-recipe-name">{SHOES[o.id].name}</span>;
   }
 }
 
@@ -117,6 +119,8 @@ function Detail({ recipe }: { recipe: Recipe }) {
     }
     case "bag":
       return <p class="hub-recipe-text">{BAGS[o.id].slots}枠</p>;
+    case "shoes":
+      return <p class="hub-recipe-text">{formatMoveMul(SHOES[o.id].moveMul)}</p>;
   }
 }
 
