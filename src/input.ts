@@ -71,8 +71,10 @@ export class InputState {
       }
     });
     window.addEventListener("blur", () => {
+      // ほかのアプリに移ってから離したキーの keyup は届かないので、投げ物を構えたままにしない
       this.keys.clear();
       this.fire = false;
+      this.aimingThrow = null;
     });
     window.addEventListener("mousemove", (e) => {
       this.mouse.x = e.clientX;

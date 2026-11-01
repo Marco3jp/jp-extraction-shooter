@@ -194,6 +194,8 @@ async function main() {
     });
     const ex = outcome === "extracted" ? extractAt(world, world.player.pos) : null;
     lastResult = { outcome, time: world.time, kills: world.kills, gained, lost, extractAt: ex ? { ...ex.pos } : null };
+    // 拠点でキャンプを置くときに、ランで立てた壁を塞がったマスとして扱わないように
+    map.resetSolid();
     persist();
     showHub();
   };
