@@ -1,6 +1,10 @@
 // 画面なしでゲームを回して、例外が出ないか、処理時間、敵どうしの撃ち合い、漁れる物の量を見る。
-// 使い方: npm run smoke
+// 使い方: npm run smoke            全部の項目を、CPU の数だけ並べて回す
+//         npm run smoke -- 自転車 パートナー   名前にどれかを含む項目だけ回す
 import { readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
+import { format } from "node:util";
+import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
 import {
   BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, FIXED_RAIL, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
@@ -26,12 +30,27 @@ const MAP_DIR = "public/maps/akihabara";
 const mapIndex = JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as MapIndex;
 const readChunk = (i: number, j: number) =>
   decodeChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
-const map = new GameMap(mapIndex);
 const [BX0, BY0, BX1, BY1] = mapIndex.bounds;
-for (const [i, j] of map.index.chunks) map.addChunk(readChunk(i, j));
+const chunks = isMainThread ? [] : mapIndex.chunks.map(([i, j]) => readChunk(i, j));
+// 区画を読み直す項目が区画の並びを変えるので、どの順で回しても同じ結果になるよう項目ごとに作り直す
+let map: GameMap;
+const freshMap = () => {
+  const m = new GameMap(mapIndex);
+  for (const c of chunks) m.addChunk(c);
+  return m;
+};
 
-// 漁れる物の量
-{
+type Section = { name: string; run: () => void | Promise<void>; timed: boolean };
+const sections: Section[] = [];
+const section = (name: string, run: Section["run"]) => {
+  sections.push({ name, run, timed: false });
+};
+/** 1ティックの処理時間を測る項目。ほかの項目と同時に回すと CPU を取り合って何倍にも出るので、1つずつ回す */
+const timedSection = (name: string, run: Section["run"]) => {
+  sections.push({ name, run, timed: true });
+};
+
+section("漁れる物の量", () => {
   const w = createWorld(map, 1, baseLoadout);
   const bins = w.loot.filter((l) => l.kind === "bin");
   const ground = w.loot.filter((l) => l.kind === "ground");
@@ -61,10 +80,10 @@ for (const [i, j] of map.index.chunks) map.addChunk(readChunk(i, j));
     byUse.set(use, (byUse.get(use) ?? 0) + 1);
   }
   console.log("箱が接している建物の用途", Object.fromEntries(byUse));
-}
+});
 
 // プレイヤーを置いたまま3分回し、敵どうしで何人倒れるか
-for (const seed of [1, 2, 3]) {
+for (const seed of [1, 2, 3]) timedSection(`敵どうし3分 seed=${seed}`, () => {
   const w = createWorld(map, seed, baseLoadout);
   w.player.pos = { ...w.extracts[0].pos };
   let worst = 0;
@@ -87,10 +106,10 @@ for (const seed of [1, 2, 3]) {
   console.log(
     `seed=${seed} 敵どうし3分: 倒れた敵 ${dead}人 落ちた持ち物 ${boxes}個　1ティック平均 ${(ms / w.tick).toFixed(3)}ms 最大 ${worst.toFixed(2)}ms（予算 ${(DT * 1000).toFixed(1)}ms）`,
   );
-}
+});
 
 // 脱出地点まで歩きながら、近くの物を拾っていく
-for (const seed of [1, 2]) {
+for (const seed of [1, 2]) section(`漁りながら脱出 seed=${seed}`, () => {
   const w = createWorld(map, seed, baseLoadout);
   const p = w.player;
   const goal = w.extracts.reduce((a, b) => (Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y) < Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y) ? a : b));
@@ -120,10 +139,10 @@ for (const seed of [1, 2]) {
   console.log(
     `seed=${seed} 漁りながら脱出: 結果=${w.outcome} ${w.time.toFixed(0)}秒 撃破 ${w.kills} 箱 ${opened}回 カバン ${bagUsed(w.bag)}枠 お金 ${w.bag.money}円 金属くず ${bagCount(w.bag, "junk")} 電子部品 ${bagCount(w.bag, "circuit")}`,
   );
-}
+});
 
 // キャンプから始めると、その近くに出て、近くに敵がいない。迎えを呼ぶと近くの敵が寄ってくる
-{
+section("キャンプ", () => {
   const camp = { x: BX0 + (BX1 - BX0) * 0.2, y: BY0 + (BY1 - BY0) * 0.3 };
   for (const seed of [1, 2, 3]) {
     const w = createWorld(map, seed, baseLoadout, camp);
@@ -150,7 +169,7 @@ for (const seed of [1, 2]) {
       `seed=${seed} キャンプ: 出た位置のずれ ${off.toFixed(1)}m 一番近い敵 ${nearest.toFixed(0)}m　迎えを呼んで寄ってきた敵 ${alerted}人　脱出まで ${(t / 30).toFixed(1)}秒 結果=${w.outcome}`,
     );
   }
-}
+});
 
 /** 敵1人と正面 18m から撃ち合う（撃ち返すだけで動かないボット）。置ける場所が無ければ null。each で毎ティックの入力を足せる */
 function duel(prof: Profile, seed: number, each?: (w: World, input: Input) => void): { win: boolean; time: number } | null {
@@ -158,7 +177,8 @@ function duel(prof: Profile, seed: number, each?: (w: World, input: Input) => vo
   if (w.player.kit) w.player.kit.ultCd = 0;
   // 相手は近距離型にする。グループの組み合わせは区画ごとに変わるので、型で選ぶ
   const e = w.actors.find((a) => a.team === "enemy" && a.kind === "short")!;
-  for (const o of w.actors) if (o.ai && o !== e && Math.hypot(o.pos.x - e.pos.x, o.pos.y - e.pos.y) < 90) o.alive = false;
+  // 離れた敵も毎ティック動き、1戦にかかる時間のほとんどがその分になるので、相手以外は全員止める
+  for (const o of w.actors) if (o.ai && o !== e) o.alive = false;
   let placed = false;
   for (let k = 0; k < 64 && !placed; k++) {
     const a = (k / 64) * Math.PI * 2;
@@ -188,6 +208,12 @@ const rich = (): Profile => {
   return p;
 };
 
+const profWith = (n: number, model: 1 | 2 = 1) => {
+  const prof = rich();
+  for (let i = 0; i < n; i++) prof.partners[i] = { model, enabled: true };
+  return prof;
+};
+
 // 武器ごとに、敵1人と撃ち合って勝てるか
 {
   const builds: [string, WeaponType, string[]][] = [
@@ -199,7 +225,7 @@ const rich = (): Profile => {
     ["ショットガン", "shotgun", []],
     ["ピストル", "pistol", []],
   ];
-  for (const [label, type, recipes] of builds) {
+  for (const [label, type, recipes] of builds) section(`武器の1対1 ${label}`, () => {
     let wins = 0, total = 0;
     for (let seed = 1; seed <= 12; seed++) {
       const prof = rich();
@@ -216,11 +242,10 @@ const rich = (): Profile => {
       if (r.win) wins++;
     }
     console.log(`${label}: 1対1の勝ち ${wins}/${total}`);
-  }
+  });
 }
 
-// 投げ物とダッシュ
-{
+section("投げ物とダッシュ", () => {
   const w = createWorld(map, 7, baseLoadout);
   const p = w.player;
   for (const a of w.actors) if (a.ai) a.alive = false;
@@ -362,7 +387,7 @@ const rich = (): Profile => {
     w.bag.slots[w.bag.slots.length - 1] = { item: "frag", count: 2 };
     w.bag.slots[w.bag.slots.length - 2] = { item: "thermite", count: 2 };
   }
-}
+});
 
 // スキル・パッシブ・アルティメット
 {
@@ -397,8 +422,7 @@ const rich = (): Profile => {
     return e;
   };
 
-  // 受けたダメージと残りのシールド
-  {
+  section("シールド追加・キルでシールド回復", () => {
     const w = withKit({ skill: "overshield" });
     const p = w.player;
     runFor(w, 1, () => ({ skill: true }));
@@ -413,10 +437,10 @@ const rich = (): Profile => {
     console.log(
       `シールド追加: 張った量 ${over}、80 ダメージを受けて 追加 ${after.over}・シールド ${after.shield}/${p.shieldMax}・ヘルス ${after.health}、${OVERSHIELD.duration}秒後の追加シールド ${p.overshield}　キルでシールド回復: 0 から ${w2.player.shield}`,
     );
-  }
+  });
 
-  // 倒したとき：速射は効いている時間が伸び、横滑りダッシュはクールダウンが終わる
-  {
+  // 速射は効いている時間が伸び、横滑りダッシュはクールダウンが終わる
+  section("倒したときのスキル", () => {
     const w = withKit({ skill: "rapidFire" });
     const k = w.player.kit!;
     runFor(w, 30, (i) => ({ skill: i === 0 }));
@@ -433,10 +457,9 @@ const rich = (): Profile => {
     console.log(
       `倒したとき: 速射の残り ${before.toFixed(2)} → ${after.toFixed(2)}秒（修正が切れるまで ${(until - w.time).toFixed(2)}秒）、横滑りダッシュのクールダウン ${cd.toFixed(2)} → ${w2.player.kit!.skillCd.toFixed(2)}秒`,
     );
-  }
+  });
 
-  // 一定時間で進んだ距離
-  {
+  section("2秒で進んだ距離", () => {
     const q = openLine(60);
     const go = (kit: Partial<KitChoice>, f: (i: number) => Partial<Input>) => {
       const w = withKit(kit);
@@ -455,7 +478,7 @@ const rich = (): Profile => {
     console.log(
       `2秒で進んだ距離: 歩き ${walk.toFixed(1)}m、加速 ${haste.toFixed(1)}m、ダッシュ2回押し ${dash1.toFixed(1)}m（ダッシュ2回のパッシブ ${dash2.toFixed(1)}m）、横滑りダッシュ ${slide.toFixed(1)}m（途中で曲げると 横 ${turn.y.toFixed(1)}m）、レール ${rail.toFixed(1)}m`,
     );
-  }
+  });
 
   // 1対1 の勝ち数と、倒すまでの時間
   {
@@ -464,7 +487,7 @@ const rich = (): Profile => {
       ["速射", { skill: "rapidFire" }, true],
       ["弾の威力", { passive: "damageUp" }, false],
     ];
-    for (const [label, kit, use] of cases) {
+    for (const [label, kit, use] of cases) section(`スキルの1対1 ${label}`, () => {
       let wins = 0, total = 0, time = 0;
       for (let seed = 1; seed <= 12; seed++) {
         const prof = rich();
@@ -480,11 +503,11 @@ const rich = (): Profile => {
         }
       }
       console.log(`アサルトライフル ${label}: 1対1の勝ち ${wins}/${total} 倒すまで平均 ${(time / Math.max(wins, 1)).toFixed(2)}秒`);
-    }
+    });
   }
 
   // 置いた壁で弾が止まるか、敵が回り込むか、消えた後に元の格子に戻るか
-  {
+  section("遮蔽物", () => {
     const w = withKit({ ult: "barrier" });
     const q = openLine(14);
     const p = w.player;
@@ -529,10 +552,10 @@ const rich = (): Profile => {
     console.log(
       `遮蔽物: 立てたマス ${cells}、1.5秒撃って 敵の体力 ${enemyHp}/200・壁の耐久 ${wallHp}/${BARRIER.hp}、壁の向こうから詰める敵が一番近づいた距離 ${closest.toFixed(1)}m、消えた後に元と違うマス ${diff}`,
     );
-  }
+  });
 
   // 巻き検知の円の中心が敵の位置と一致しないか。広域探知で見える段階
-  {
+  section("巻き検知・広域探知", () => {
     const w = withKit({ passive: "healSense", ult: "scan" });
     const q = openLine(25);
     w.player.pos = { ...q };
@@ -565,21 +588,21 @@ const rich = (): Profile => {
     console.log(
       `巻き検知: 円の中心と敵の距離 ${min.toFixed(2)}〜${max.toFixed(2)}m（半径 ${HEAL_SENSE.radius}m）、3秒で置き直した回数 ${moves}、回復をやめたら消えるか ${cleared}　広域探知: 段階 ${before} → ${during} → ${SCAN.duration}秒後 ${e.info}`,
     );
-  }
+  });
 
-  // 弾倉なし：マガジンが減らず、カバンの弾が減る
-  {
+  // マガジンが減らず、カバンの弾が減る
+  section("弾倉なし", () => {
     const w = withKit({ ult: "bottomless" });
     const p = w.player;
     const ws = p.weapons[p.cur];
     const mag = ws.mag, bag = bagCount(w.bag, ws.def.ammo);
     runFor(w, 30 * 3, (i) => ({ ult: i === 0, fire: true }));
     console.log(`弾倉なし: 3秒撃って マガジン ${mag} → ${ws.mag}、カバンの弾 ${bag} → ${bagCount(w.bag, ws.def.ammo)}、リロードしていない ${p.reloadT === 0}`);
-  }
+  });
 }
 
-// 強化パーツ：1ランに出る数と、拾ったときの効き目
-{
+// 1ランに出る数と、拾ったときの効き目
+section("強化パーツ", () => {
   let total = 0;
   const byId = new Map<BuffId, number>();
   const seeds = [1, 2, 3, 4, 5, 6];
@@ -651,18 +674,12 @@ const rich = (): Profile => {
       `受け渡し: 2個目のシールドコアは予備に ${spare.join(",")}、渡すとパートナーのシールドの上限 ${before} → ${partner.shieldMax}、パートナーの強化パーツ ${buffsOf(partner).join(",")}、パートナーに効かない冷却ユニットの2個目は予備に入らない ${!w.spareBuffs.includes("coolingUnit")}`,
     );
   }
-}
+});
 
 // パートナー
 {
-  const profWith = (n: number, model: 1 | 2 = 1) => {
-    const prof = rich();
-    for (let i = 0; i < n; i++) prof.partners[i] = { model, enabled: true };
-    return prof;
-  };
-
-  // クラフトの順番：1体目 → 2体目 → 1体目の改良
-  {
+  // 1体目 → 2体目 → 1体目の改良
+  section("パートナーのクラフト", () => {
     const prof = rich();
     const order: string[] = [];
     const tryAll = () => RECIPES.filter((r) => r.category === "partner").map((r) => `${r.id}:${craftBlocker(prof, r) ?? "作れる"}`).join(" ");
@@ -673,10 +690,10 @@ const rich = (): Profile => {
     }
     const run = makeRunLoadout(prof).partners.map((x) => `${x.index + 1}:${x.model}`).join(",");
     console.log(`パートナーのクラフト:\n  ${order.join("\n  ")}\n  連れていく ${run}`);
-  }
+  });
 
   // 脱出地点まで歩く。パートナーが付いてこられるか、どれだけ離れるか
-  for (const seed of [1, 2]) {
+  for (const seed of [1, 2]) timedSection(`パートナー2体と歩く seed=${seed}`, () => {
     const w = createWorld(map, seed, makeRunLoadout(profWith(2)));
     for (const a of w.actors) if (a.team === "enemy") a.alive = false;
     const p = w.player;
@@ -705,7 +722,7 @@ const rich = (): Profile => {
     console.log(
       `seed=${seed} パートナー2体と歩く: ${w.time.toFixed(0)}秒 プレイヤーとの距離 平均 ${(sum / n).toFixed(1)}m 最大 ${max.toFixed(1)}m、${PARTNER_LEASH}m より離れていた時間 ${((far / n) * 100).toFixed(1)}%　1ティック平均 ${(ms / w.tick).toFixed(3)}ms`,
     );
-  }
+  });
 
   // 敵の3人組と撃ち合う。プレイヤー役は動かずに、見えている一番近い敵を撃つ。シールドが割れて敵が見えていなければ巻く
   const squad = (partnerCount: number, seed: number) => {
@@ -717,7 +734,7 @@ const rich = (): Profile => {
     const group = [...byGroup.values()].find((g) => g.map((a) => a.kind).sort().join() === "long,mid,short");
     if (!group) return null;
     const center = group[0].pos;
-    for (const o of w.actors) if (o.team === "enemy" && !group.includes(o) && Math.hypot(o.pos.x - center.x, o.pos.y - center.y) < 120) o.alive = false;
+    for (const o of w.actors) if (o.team === "enemy" && !group.includes(o)) o.alive = false;
     let placed = false;
     for (let k = 0; k < 64 && !placed; k++) {
       const ang = (k / 64) * Math.PI * 2;
@@ -758,15 +775,12 @@ const rich = (): Profile => {
     const win = p.alive && group.every((e) => !e.alive);
     return { win, hp: p.alive ? p.shield + p.health : 0, downs, far, samples, time: w.time };
   };
-  for (const n of [0, 1, 2]) {
+  for (const n of [0, 1, 2]) section(`パートナー${n}体 対 3人組`, () => {
     let wins = 0, total = 0, hp = 0, downs = 0, far = 0, samples = 0, time = 0;
-    const t0 = performance.now();
-    let ticks = 0;
     for (let seed = 1; seed <= 100; seed++) {
       const r = squad(n, seed);
       if (!r) continue;
       total++;
-      ticks += r.time / DT;
       if (r.win) {
         wins++;
         hp += r.hp;
@@ -776,23 +790,22 @@ const rich = (): Profile => {
       far += r.far;
       samples += r.samples;
     }
-    const ms = performance.now() - t0;
     console.log(
       `パートナー${n}体 対 3人組: 勝ち ${wins}/${total} 勝ったときの残り体力 平均 ${(hp / Math.max(wins, 1)).toFixed(0)}/200 倒すまで平均 ${(time / Math.max(wins, 1)).toFixed(1)}秒` +
-        (n ? `　パートナーが倒れた回数 ${downs}（1戦あたり ${(downs / total).toFixed(2)}）、${PARTNER_LEASH}m より離れていた時間 ${((far / Math.max(samples, 1)) * 100).toFixed(1)}%` : "") +
-        `　1ティック平均 ${(ms / ticks).toFixed(3)}ms`,
+        (n ? `　パートナーが倒れた回数 ${downs}（1戦あたり ${(downs / total).toFixed(2)}）、${PARTNER_LEASH}m より離れていた時間 ${((far / Math.max(samples, 1)) * 100).toFixed(1)}%` : ""),
     );
-  }
+  });
 
   // パートナー1体と敵の中距離型1人が 18m で撃ち合う。プレイヤーは倒れた扱いにして、敵に狙わせない
-  for (const [model, mode] of [[1, "cover"], [2, "cover"], [1, "classic"], [2, "classic"]] as const) {
+  for (const [model, mode] of [[1, "cover"], [2, "cover"], [1, "classic"], [2, "classic"]] as const) section(`パートナー（${model === 1 ? "初期型" : "改良型"}・${mode === "cover" ? "遮蔽を使う" : "前の作り"}） 対 敵の中距離型`, () => {
     PARTNER_TACTICS.mode = mode;
     let wins = 0, total = 0, hp = 0;
+    try {
     for (let seed = 1; seed <= 100; seed++) {
       const w = createWorld(map, seed, makeRunLoadout(profWith(1, model)));
       const a = w.actors.find((x) => x.team === "partner")!;
       const e = w.actors.find((x) => x.team === "enemy" && x.kind === "mid")!;
-      for (const o of w.actors) if (o.team === "enemy" && o !== e && Math.hypot(o.pos.x - e.pos.x, o.pos.y - e.pos.y) < 120) o.alive = false;
+      for (const o of w.actors) if (o.team === "enemy" && o !== e) o.alive = false;
       let spot: Vec | null = null;
       for (let k = 0; k < 64 && !spot; k++) {
         const ang = (k / 64) * Math.PI * 2;
@@ -813,12 +826,14 @@ const rich = (): Profile => {
         hp += a.shield + a.health;
       }
     }
-    PARTNER_TACTICS.mode = "cover";
+    } finally {
+      PARTNER_TACTICS.mode = "cover";
+    }
     console.log(`パートナー（${model === 1 ? "初期型" : "改良型"}・${mode === "cover" ? "遮蔽を使う" : "前の作り"}） 対 敵の中距離型 1対1: 勝ち ${wins}/${total} 勝ったときの残り体力 平均 ${(hp / Math.max(wins, 1)).toFixed(0)}/${model === 1 ? 200 : 225}`);
-  }
+  });
 
-  // パートナーの回復。散策中は満タンまで巻き、戦闘中は隙を見て巻く
-  {
+  // 散策中は満タンまで巻き、戦闘中は隙を見て巻く
+  section("パートナーの回復", () => {
     const setup = () => {
       const w = createWorld(map, 7, makeRunLoadout(profWith(1)));
       for (const o of w.actors) if (o.team === "enemy") o.alive = false;
@@ -896,10 +911,10 @@ const rich = (): Profile => {
     fight("戦闘中・ヘルス 20", (a) => {
       a.health = 20;
     }, 30 * 12);
-  }
+  });
 
-  // 倒れたパートナーを起こす。撃たれたら押し直しになる
-  {
+  // 撃たれたら押し直しになる
+  section("倒れたパートナーを起こす", () => {
     const w = createWorld(map, 7, makeRunLoadout(profWith(1)));
     for (const a of w.actors) if (a.team === "enemy") a.alive = false;
     const p = w.player;
@@ -920,11 +935,10 @@ const rich = (): Profile => {
     console.log(
       `パートナーを起こす: 倒れてもランは続く ${downed}、2秒押して ${half.toFixed(2)}秒分、撃たれたら ${reset.toFixed(2)} に戻る、そこから立ち上がるまで ${(w.time - t1).toFixed(2)}秒（必要 ${PARTNER_REVIVE.time}秒）、立ち上がったヘルス ${a.health}`,
     );
-  }
+  });
 }
 
-// 固定レール・ダッシュパッド・自転車
-{
+section("固定レール・ダッシュパッド・自転車", () => {
   const quiet = (w: World) => {
     for (const a of w.actors) if (a.team === "enemy") a.alive = false;
   };
@@ -1151,7 +1165,7 @@ const rich = (): Profile => {
     const d = Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y);
     console.log(`パートナーが ${PARTNER_CATCH_UP.warp + 20}m 離れると: 次のティックで ${d.toFixed(1)}m の所へ移る、そこからプレイヤーまで歩いて行ける ${map.walkLine(a.pos, p.pos, 0.45)}`);
   }
-}
+});
 
 // 区画を出し入れしながら、マップを左右に往復して走る。12m/s（自転車の速さ）
 const streamRun = async (range: StreamRange, label: string) => {
@@ -1208,11 +1222,11 @@ const streamRun = async (range: StreamRange, label: string) => {
       + `周りの区画が間に合わなかった回数 ${missing}　1ティック平均 ${(total / ticks).toFixed(3)}ms 最大 ${worst.toFixed(2)}ms`,
   );
 };
-await streamRun(STREAM_RANGE, `読む ${STREAM_RANGE.load}m・捨てる ${STREAM_RANGE.drop}m`);
-await streamRun({ load: 160, drop: 240, lookahead: 8 }, "読む 160m・捨てる 240m");
+timedSection("区画の出し入れ 本来の距離", () => streamRun(STREAM_RANGE, `読む ${STREAM_RANGE.load}m・捨てる ${STREAM_RANGE.drop}m`));
+timedSection("区画の出し入れ 縮めた距離", () => streamRun({ load: 160, drop: 240, lookahead: 8 }, "読む 160m・捨てる 240m"));
 
 // 区画を捨てて読み直すと、同じ敵と箱が出て、倒した敵・開けた箱・拾った物は元に戻らない
-{
+section("区画を読み直す", () => {
   const w = createWorld(map, 11, baseLoadout);
   const snap = (key: string) => ({
     enemies: w.actors.filter((a) => a.spawn?.chunk === key).map((a) => `${a.spawn!.n}:${a.kind}:${a.pos.x.toFixed(2)},${a.pos.y.toFixed(2)}`),
@@ -1245,4 +1259,65 @@ await streamRun({ load: 160, drop: 240, lookahead: 8 }, "読む 160m・捨てる
       + `読み直した敵 ${after.enemies.length}/${before.enemies.length}人（倒した1人を除いて同じ ${same(after.enemies.filter((x) => expectEnemies.some((y) => y.split(":")[0] === x.split(":")[0])), expectEnemies)}）、`
       + `箱 ${bin ? `中身 ${binAfter?.items.length}/${BIN_ITEMS} 開いている ${binAfter?.opened}` : "なし"}、拾った物 ${ground ? (w.loot.some((l) => l.spawn?.chunk === key && l.spawn.n === ground.spawn!.n) ? "戻った" : "戻らない") : "なし"}`,
   );
+});
+
+type Done = { k: number; out: string; error?: string; ms: number };
+
+if (isMainThread) {
+  const want = process.argv.slice(2);
+  const picked = sections.flatMap((s, k) => (!want.length || want.some((x) => s.name.includes(x)) ? [k] : []));
+  if (!picked.length) {
+    console.error(`名前に ${want.join("・")} を含む項目がない。項目: ${sections.map((s) => s.name).join(" / ")}`);
+    process.exit(2);
+  }
+  const t0 = performance.now();
+  const done = new Map<number, Done>();
+  let printed = 0;
+  const flush = () => {
+    for (; printed < picked.length && done.has(picked[printed]); printed++) {
+      const d = done.get(picked[printed])!;
+      process.stdout.write(d.out);
+      if (d.error) console.error(`「${sections[d.k].name}」で例外:\n${d.error}`);
+    }
+  };
+  const pool = (queue: number[], n: number) => Promise.all(Array.from({ length: Math.min(n, queue.length) }, () => new Promise<void>((resolve, reject) => {
+    const w = new Worker(new URL(import.meta.url));
+    const feed = () => {
+      const k = queue.shift();
+      if (k === undefined) w.terminate().then(() => resolve());
+      else w.postMessage(k);
+    };
+    w.on("message", (d: Done) => {
+      done.set(d.k, d);
+      flush();
+      feed();
+    });
+    w.on("error", reject);
+    feed();
+  })));
+  const workers = availableParallelism();
+  await pool(picked.filter((k) => sections[k].timed), 1);
+  await pool(picked.filter((k) => !sections[k].timed), workers);
+  const all = [...done.values()];
+  const slow = all.sort((a, b) => b.ms - a.ms).slice(0, 3).map((d) => `${sections[d.k].name} ${(d.ms / 1000).toFixed(1)}秒`).join("、");
+  const timed = picked.filter((k) => sections[k].timed).length;
+  const how = timed ? `処理時間を測る ${timed}項目は1つずつ、残りは ${workers} 並列` : `${workers} 並列`;
+  console.error(`${picked.length}項目を ${((performance.now() - t0) / 1000).toFixed(1)}秒（${how}）。長かった項目: ${slow}`);
+  if (all.some((d) => d.error)) process.exitCode = 1;
+} else {
+  parentPort!.on("message", async (k: number) => {
+    const lines: string[] = [];
+    console.log = (...args: unknown[]) => {
+      lines.push(format(...args) + "\n");
+    };
+    map = freshMap();
+    const t = performance.now();
+    let error: string | undefined;
+    try {
+      await sections[k].run();
+    } catch (e) {
+      error = e instanceof Error ? e.stack : String(e);
+    }
+    parentPort!.postMessage({ k, out: lines.join(""), error, ms: performance.now() - t } satisfies Done);
+  });
 }
