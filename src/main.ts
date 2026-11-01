@@ -147,6 +147,8 @@ async function main() {
   async function deploy() {
     if (deploying) return;
     deploying = true;
+    // 前のランで読んだ遠くの区画を先に捨てる。残すと createWorld が敵と箱を置き、最初のフレームですぐ捨てることになる
+    streamer.dropAround(startOf());
     await streamer.loadAround(startOf());
     deploying = false;
     world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile, map.index.id), campOn(profile, map.index.id) ?? undefined);

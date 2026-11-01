@@ -86,6 +86,8 @@ export class Hud {
   private mapView: MapView;
   private panelSig = "";
   private promptHtml = "";
+  /** 毎フレーム組み立て直す欄は、前と同じ中身なら DOM に書かない */
+  private shown = new Map<HTMLElement, string>();
   /** インベントリ画面。lootId があれば箱の中身も並べる */
   panel = { open: false, lootId: null as number | null, byTab: false };
   bigMap = false;
@@ -359,6 +361,12 @@ export class Hud {
     el.classList.toggle("show", this.areaBannerT > 0);
   }
 
+  private setHtml(el: HTMLElement, html: string) {
+    if (this.shown.get(el) === html) return;
+    this.shown.set(el, html);
+    el.innerHTML = html;
+  }
+
   private feedPush(text: string, w: World) {
     this.feed.push({ text, t: w.time });
     if (this.feed.length > 5) this.feed.shift();
@@ -367,10 +375,10 @@ export class Hud {
   update(w: World, r: Renderer, mouse: { x: number; y: number }, dt: number) {
     const p = w.player;
     const alive = w.actors.filter((a) => a.team === "enemy" && a.alive).length;
-    $("#info").innerHTML =
+    this.setHtml($("#info"),
       `<div class="map">${w.map.name}</div>` +
       `<div>${fmtTime(w.time)}　撃破 ${w.kills}　残り ${alive}</div>` +
-      `<div class="debug">視線 [N]: ${LEVEL_NAMES[w.debug.sightLevel]}<br>ビーコン [B]: ${LEVEL_NAMES[w.debug.beaconLevel]}</div>`;
+      `<div class="debug">視線 [N]: ${LEVEL_NAMES[w.debug.sightLevel]}<br>ビーコン [B]: ${LEVEL_NAMES[w.debug.beaconLevel]}</div>`);
 
     const shieldEl = $("#shield");
     const cellCount = Math.ceil(p.shieldMax / SHIELD_PER_CELL);
@@ -393,14 +401,14 @@ export class Hud {
     const overText = p.overshield > 0 ? `＋${Math.ceil(p.overshield)}` : "";
     $("#vitals-text").textContent = `${Math.ceil(p.shield)}${overText} / ${p.shieldMax}　${Math.ceil(p.health)} / ${HEALTH_MAX}`;
 
-    $("#weapons").innerHTML = p.weapons
+    this.setHtml($("#weapons"), p.weapons
       .map((ws, i) => {
         const res = bagCount(w.bag, ws.def.ammo);
         const cls = i === p.cur ? "weapon active" : "weapon";
         const reload = i === p.cur && p.reloadT > 0 ? `<div class="bar"><div style="width:${(1 - p.reloadT / ws.def.reload) * 100}%"></div></div>` : "";
         return `<div class="${cls}"><span class="key">${i + 1}</span><span class="name">${ws.def.name}</span><span class="ammo"><b>${ws.mag}</b> / ${res}</span>${reload}</div>`;
       })
-      .join("");
+      .join(""));
 
     for (const el of [...Array.from($("#items").children), ...Array.from($("#devices").children)] as HTMLElement[]) {
       if (el.classList.contains("dash")) {
@@ -512,7 +520,7 @@ export class Hud {
     this.updateDefense(w);
 
     this.feed = this.feed.filter((f) => w.time - f.t < FEED_LIFE);
-    $("#feed").innerHTML = this.feed.map((f) => `<div>${f.text}</div>`).join("");
+    this.setHtml($("#feed"), this.feed.map((f) => `<div>${f.text}</div>`).join(""));
 
     this.mapView.drawMini($<HTMLCanvasElement>("#minimap"), w, this.pings);
     this.updatePick(w, mouse);

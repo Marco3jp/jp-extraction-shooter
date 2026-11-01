@@ -149,9 +149,10 @@ export function tickSkills(w: World, a: Actor) {
     a.overshieldT = Math.max(0, a.overshieldT - DT);
     if (a.overshieldT <= 0) a.overshield = 0;
   }
-  const n = a.mods.length;
-  a.mods = a.mods.filter((m) => m.until === null || m.until > w.time);
-  if (a.mods.length !== n) refreshStats(a);
+  if (a.mods.some((m) => m.until !== null && m.until <= w.time)) {
+    a.mods = a.mods.filter((m) => m.until === null || m.until > w.time);
+    refreshStats(a);
+  }
 
   const k = a.kit;
   if (!k) return;

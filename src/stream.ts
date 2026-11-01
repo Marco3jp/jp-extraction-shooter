@@ -80,6 +80,16 @@ export class ChunkStreamer {
     this.arrived.sort((a, b) => near(a.i, a.j) - near(b.i, b.j));
     for (const c of this.arrived.splice(0, this.perUpdate)) this.place(c);
 
+    this.dropFar(near);
+  }
+
+  /** p から捨てる距離より遠い区画を捨てる。出撃の前に、前のランで読んだ区画を片付けるのに使う */
+  dropAround(p: Vec) {
+    this.arrived = this.arrived.filter((c) => chunkDist(p, c.i, c.j) <= this.range.drop);
+    this.dropFar((i, j) => chunkDist(p, i, j));
+  }
+
+  private dropFar(near: (i: number, j: number) => number) {
     for (const c of [...this.map.chunks.values()]) {
       if (near(c.i, c.j) <= this.range.drop) continue;
       this.map.removeChunk(c.i, c.j);
