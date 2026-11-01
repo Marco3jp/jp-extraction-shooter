@@ -34,7 +34,7 @@ async function main() {
 
   let profile: Profile = (await loadProfile()) ?? defaultProfile();
   let lastResult: LastRunSummary | null = null;
-  const startOf = () => campOn(profile, map.name) ?? { x: map.index.layout.start[0] * map.w, y: map.index.layout.start[1] * map.h };
+  const startOf = () => campOn(profile, map.index.id) ?? { x: map.index.layout.start[0], y: map.index.layout.start[1] };
   await streamer.loadAround(startOf());
   let world: World = createWorld(map, 1, makeRunLoadout(profile));
   const hud = new Hud(world, mapView);
@@ -143,7 +143,7 @@ async function main() {
     deploying = true;
     await streamer.loadAround(startOf());
     deploying = false;
-    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile), campOn(profile, map.name) ?? undefined);
+    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile), campOn(profile, map.index.id) ?? undefined);
     renderer.reset();
     hud.reset(world);
     hubEl.style.display = "none";

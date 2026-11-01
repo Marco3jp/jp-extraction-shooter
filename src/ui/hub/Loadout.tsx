@@ -26,12 +26,12 @@ import { ModList } from "./parts";
 
 type Props = {
   profile: Profile;
-  mapName: string;
+  mapId: string;
   onChange: (next: Profile) => void;
   onDeploy: () => void;
 };
 
-export function Loadout({ profile, mapName, onChange, onDeploy }: Props) {
+export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
   const [editing, setEditing] = useState<WeaponType>(profile.loadout.weapons[0]);
   const target = profile.weapons.includes(editing) ? editing : profile.loadout.weapons[0];
 
@@ -138,8 +138,8 @@ export function Loadout({ profile, mapName, onChange, onDeploy }: Props) {
         <div class="hub-field">
           <div class="hub-field-label">出発地点</div>
           <div class="hub-chips">
-            <span class="hub-start">{campOn(profile, mapName) ? "キャンプ" : "マップの出発地点"}</span>
-            {campOn(profile, mapName) && (
+            <span class="hub-start">{campOn(profile, mapId) ? "キャンプ" : "マップの出発地点"}</span>
+            {campOn(profile, mapId) && (
               <button class="hub-button" onClick={() => update((p) => (p.camp = null))}>
                 キャンプをたたむ
               </button>

@@ -402,11 +402,11 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const layout = map.index.layout;
   const startPos = start
     ? nearestFree(start.x, start.y)
-    : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h);
+    : nearestFree(layout.start[0], layout.start[1]);
   if (!startPos) throw new Error("出発地点の周りに空いている場所が見つからない");
   // 遠くてまだ読んでいない脱出地点は、書いてある位置のまま置く
-  const extracts: Extract[] = layout.extracts.map(([fx, fy]) => ({
-    pos: nearestFree(fx * map.w, fy * map.h) ?? { x: fx * map.w, y: fy * map.h }, readyAt: null, ready: false, progress: 0,
+  const extracts: Extract[] = layout.extracts.map(([x, y]) => ({
+    pos: nearestFree(x, y) ?? { x, y }, readyAt: null, ready: false, progress: 0,
   }));
 
   let nextId = 1;

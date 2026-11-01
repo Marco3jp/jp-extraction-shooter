@@ -22,7 +22,7 @@ export function CampPicker({ map, mapView, profile, center, onChange }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState<Vec | null>(null);
   const [, setLoaded] = useState(0);
-  const camp = campOn(profile, map.name);
+  const camp = campOn(profile, map.index.id);
   const ox = center.x - VIEW / 2, oy = center.y - VIEW / 2;
   const scale = SIZE / VIEW;
   const toMap = (e: MouseEvent): Vec => {
@@ -88,7 +88,7 @@ export function CampPicker({ map, mapView, profile, center, onChange }: Props) {
           const v = toMap(e);
           if (!placeable(v)) return;
           const next = structuredClone(profile);
-          next.camp = { map: map.name, x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10 };
+          next.camp = { map: map.index.id, x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10 };
           onChange(next);
         }}
       />

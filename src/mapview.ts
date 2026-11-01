@@ -53,7 +53,10 @@ export class MapView {
         // 絵の外を指すと描かないブラウザがあるので、重なる所だけを切り出す
         const x0 = Math.max(ox, ti * T), y0 = Math.max(oy, tj * T);
         const x1 = Math.min(ox + mw, (ti + 1) * T), y1 = Math.min(oy + mh, (tj + 1) * T);
-        ctx.drawImage(img, x0 - ti * T, y0 - tj * T, x1 - x0, y1 - y0, dx + (x0 - ox) * scale, dy + (y0 - oy) * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+        // 描く先をピクセルの境目に揃える。小数のままだと隣の絵との間に細いすき間が見える
+        const sx0 = Math.round(dx + (x0 - ox) * scale), sy0 = Math.round(dy + (y0 - oy) * scale);
+        const sx1 = Math.round(dx + (x1 - ox) * scale), sy1 = Math.round(dy + (y1 - oy) * scale);
+        ctx.drawImage(img, x0 - ti * T, y0 - tj * T, x1 - x0, y1 - y0, sx0, sy0, sx1 - sx0, sy1 - sy0);
       }
     }
   }
@@ -76,11 +79,13 @@ export class MapView {
   drawFull(canvas: HTMLCanvasElement, w: World, pings: Ping[]) {
     const ctx = canvas.getContext("2d")!;
     const cw = canvas.width, ch = canvas.height;
-    const scale = Math.min(cw / this.map.w, ch / this.map.h);
-    const offX = (cw - this.map.w * scale) / 2, offY = (ch - this.map.h * scale) / 2;
+    const [bx0, by0, bx1, by1] = this.map.bounds;
+    const mw = bx1 - bx0, mh = by1 - by0;
+    const scale = Math.min(cw / mw, ch / mh);
+    const offX = (cw - mw * scale) / 2, offY = (ch - mh * scale) / 2;
     ctx.clearRect(0, 0, cw, ch);
-    this.drawRect(ctx, 0, 0, this.map.w, this.map.h, offX, offY, scale);
-    const toS = (v: Vec) => ({ x: offX + v.x * scale, y: offY + v.y * scale });
+    this.drawRect(ctx, bx0, by0, mw, mh, offX, offY, scale);
+    const toS = (v: Vec) => ({ x: offX + (v.x - bx0) * scale, y: offY + (v.y - by0) * scale });
     this.drawMarkers(ctx, w, pings, toS, scale, Math.max(cw, ch), false);
   }
 

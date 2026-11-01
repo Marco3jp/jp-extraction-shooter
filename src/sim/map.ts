@@ -5,11 +5,16 @@ export const Solid = { free: 0, building: 1, cover: 2 } as const;
 
 /** 区画の一辺（m）。tools/osm_to_map.py の CHUNK と揃える */
 export const CHUNK = 128;
-/** 読み込んだ区画を置いておく格子の一辺（m）。端と端がつながっていて、座標の下位ビットだけでマスを引く */
-const RING_BITS = 10;
+/** 読み込んだ区画を置いておく格子の一辺（m）。端と端がつながっていて、座標の下位ビットだけでマスを引く。
+ * 持っている区画の広がり（捨てる距離の2倍と先読みの分）より広くする。狭いと反対側の区画どうしが同じ場所を取り合う */
+const RING_BITS = 11;
 const RING = 1 << RING_BITS;
 const RING_MASK = RING - 1;
 const SLOTS = RING / CHUNK;
+/** 経路探索で使う、出発点を真ん中にした四角の一辺（m） */
+const PATH_BITS = 10;
+const PATH = 1 << PATH_BITS;
+const PATH_MASK = PATH - 1;
 
 /** 地面に描く表示。座標はマップのセル単位、angle は道の伸びる向き（ラジアン） */
 export type Marking = { x: number; y: number; angle: number; len: number };
@@ -39,11 +44,13 @@ export type MapIndex = {
   /** public/maps/ の下のディレクトリ名 */
   id: string;
   name: string;
-  width: number;
-  height: number;
+  /** 範囲 [左, 上, 右, 下]。ゲームの座標は関東全体で1つの原点から測るので、0 から始まらない */
+  bounds: [number, number, number, number];
   chunk: number;
+  /** 実際の長さに掛けた倍率。1マスは実際の 1 / scale m */
+  scale: number;
   attribution: string;
-  /** 位置はマップの幅・高さに対する割合（0〜1） */
+  /** 位置はゲームの座標 */
   layout: {
     start: [number, number];
     extracts: [number, number][];
@@ -149,9 +156,8 @@ export const chunkOf = (c: number) => Math.floor(c / CHUNK);
 
 export class GameMap {
   readonly name: string;
-  /** マップの範囲（m）。区画ごとに敵や箱を置くようになったら使わなくなる */
-  readonly w: number;
-  readonly h: number;
+  /** 範囲 [左, 上, 右, 下] */
+  readonly bounds: [number, number, number, number];
   readonly index: MapIndex;
   /** 読み込んである区画 */
   readonly chunks = new Map<string, LoadedChunk>();
@@ -168,10 +174,10 @@ export class GameMap {
   private slotJ = new Float64Array(SLOTS * SLOTS).fill(NaN);
   private slotTypes: BuildingType[][] = [];
 
-  private gScore = new Float32Array(RING * RING);
-  private came = new Int32Array(RING * RING);
-  private stamp = new Uint32Array(RING * RING);
-  private closed = new Uint32Array(RING * RING);
+  private gScore = new Float32Array(PATH * PATH);
+  private came = new Int32Array(PATH * PATH);
+  private stamp = new Uint32Array(PATH * PATH);
+  private closed = new Uint32Array(PATH * PATH);
   private gen = 1;
   private heap = new MinHeap();
 
@@ -179,8 +185,7 @@ export class GameMap {
     if (index.chunk !== CHUNK) throw new Error(`区画の大きさが合わない: ${index.chunk}`);
     this.index = index;
     this.name = index.name;
-    this.w = index.width;
-    this.h = index.height;
+    this.bounds = index.bounds;
   }
 
   private slot(i: number, j: number) {
@@ -197,10 +202,16 @@ export class GameMap {
     return this.chunks.has(chunkKey(i, j));
   }
 
+  /** 置き場所を取り合って捨てた区画の数。0 のままなら RING が足りている */
+  evictions = 0;
+
   /** 区画を格子に書き込む。同じ置き場所に別の区画があれば、それを捨てる */
   addChunk(c: LoadedChunk) {
     const s = this.slot(c.i, c.j);
-    if (!Number.isNaN(this.slotI[s])) this.removeChunk(this.slotI[s], this.slotJ[s]);
+    if (!Number.isNaN(this.slotI[s])) {
+      this.removeChunk(this.slotI[s], this.slotJ[s]);
+      this.evictions++;
+    }
     const { ground, solid, btype } = c;
     const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
     for (let y = 0; y < CHUNK; y++) {
@@ -362,11 +373,11 @@ export class GameMap {
     const sx = Math.floor(a.x), sy = Math.floor(a.y);
     const tx = Math.floor(b.x), ty = Math.floor(b.y);
     if (this.blocked(tx, ty)) return null;
-    // 出発点を真ん中にした RING 四方の中だけを探す。読み込んである範囲はこれより狭い
-    const ox = sx - RING / 2, oy = sy - RING / 2;
+    // 出発点を真ん中にした PATH 四方の中だけを探す
+    const ox = sx - PATH / 2, oy = sy - PATH / 2;
     const idx = (x: number, y: number) => {
       const lx = x - ox, ly = y - oy;
-      return lx < 0 || ly < 0 || lx >= RING || ly >= RING ? -1 : lx + ly * RING;
+      return lx < 0 || ly < 0 || lx >= PATH || ly >= PATH ? -1 : lx + ly * PATH;
     };
     const start = idx(sx, sy), goal = idx(tx, ty);
     if (goal < 0) return null;
@@ -392,7 +403,7 @@ export class GameMap {
         break;
       }
       if (++expanded > maxNodes) break;
-      const cx = (cur & RING_MASK) + ox, cy = (cur >> RING_BITS) + oy;
+      const cx = (cur & PATH_MASK) + ox, cy = (cur >> PATH_BITS) + oy;
       const g = this.gScore[cur];
       for (const [dx, dy, cost] of dirs) {
         const nx = cx + dx, ny = cy + dy;
@@ -412,7 +423,7 @@ export class GameMap {
     }
     if (!found) return null;
     const cells: Vec[] = [];
-    for (let c = goal; c !== -1; c = this.came[c]) cells.push({ x: (c & RING_MASK) + ox + 0.5, y: (c >> RING_BITS) + oy + 0.5 });
+    for (let c = goal; c !== -1; c = this.came[c]) cells.push({ x: (c & PATH_MASK) + ox + 0.5, y: (c >> PATH_BITS) + oy + 0.5 });
     cells.reverse();
     cells[cells.length - 1] = { x: b.x, y: b.y };
     // 見通せるところは飛ばして、まっすぐ歩けるようにする

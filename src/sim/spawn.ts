@@ -5,7 +5,7 @@ import {
   type EnemyKind,
 } from "./data";
 import type { Stack } from "./inventory";
-import { CHUNK, Solid, chunkKey, type LoadedChunk, type Vec } from "./map";
+import { CHUNK, Ground, Solid, chunkKey, type LoadedChunk, type Vec } from "./map";
 import { Rng } from "./rng";
 import { enemyWeapon, makeActor, pickWeighted, rollStack, type Loot, type World } from "./world";
 
@@ -40,7 +40,8 @@ function populate(w: World, c: LoadedChunk) {
   const rng = new Rng(chunkSeed(w.seed, c.i, c.j));
   const mem = w.memory.get(key);
   const x0 = c.i * CHUNK, y0 = c.j * CHUNK;
-  const isBuilding = (x: number, y: number) => map.solidAt(x, y) === Solid.building;
+  // マップの外のマスも塞がっているが、建物の壁ではないので箱を寄せない
+  const isBuilding = (x: number, y: number) => map.solidAt(x, y) === Solid.building && map.groundAt(x, y) !== Ground.outside;
 
   // 区画の外のマスは読んでいないことがあるので、縁の1マスには置かない
   const free: Vec[] = [];

@@ -11,8 +11,9 @@ import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
 import { CHUNK, GameMap, decodeChunk, type ChunkJson, type MapIndex } from "../src/sim/map";
-import { ChunkStreamer } from "../src/stream";
+import { ChunkStreamer, STREAM_RANGE, type StreamRange } from "../src/stream";
 import { Rng } from "../src/sim/rng";
+import { syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
 import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutWeapon, type Profile } from "../src/meta/profile";
@@ -26,6 +27,7 @@ const mapIndex = JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as Ma
 const readChunk = (i: number, j: number) =>
   decodeChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
 const map = new GameMap(mapIndex);
+const [BX0, BY0, BX1, BY1] = mapIndex.bounds;
 for (const [i, j] of map.index.chunks) map.addChunk(readChunk(i, j));
 
 // 漁れる物の量
@@ -122,7 +124,7 @@ for (const seed of [1, 2]) {
 
 // キャンプから始めると、その近くに出て、近くに敵がいない。迎えを呼ぶと近くの敵が寄ってくる
 {
-  const camp = { x: map.w * 0.2, y: map.h * 0.3 };
+  const camp = { x: BX0 + (BX1 - BX0) * 0.2, y: BY0 + (BY1 - BY0) * 0.3 };
   for (const seed of [1, 2, 3]) {
     const w = createWorld(map, seed, baseLoadout, camp);
     const p = w.player;
@@ -227,7 +229,7 @@ const rich = (): Profile => {
   let spot = null;
   const spotRng = new Rng(7);
   for (let tries = 0; tries < 2000 && !spot; tries++) {
-    const q = { x: 20 + spotRng.next() * (map.w - 40), y: 20 + spotRng.next() * (map.h - 40) };
+    const q = { x: BX0 + 20 + spotRng.next() * (BX1 - BX0 - 40), y: BY0 + 20 + spotRng.next() * (BY1 - BY0 - 40) };
     const r = { x: q.x + 10, y: q.y };
     if (map.walkable(q.x, q.y) && map.walkable(r.x, r.y) && map.walkLine(q, r, 1.5)) spot = [q, r];
   }
@@ -243,6 +245,8 @@ const rich = (): Profile => {
       const input = { ...emptyInput(), aim: { ...e.pos }, ...f(i) };
       e.pos = { ...r };
       e.vel = { x: 0, y: 0 };
+      // 投げ物の効き目だけを見るので、敵には撃たせない。プレイヤーが倒れると後の項目が測れない
+      if (e.ai) e.ai.restT = 1;
       step(w, input);
     }
   };
@@ -372,8 +376,8 @@ const rich = (): Profile => {
   };
   // 幅 1.5m で +x 方向に len だけまっすぐ歩ける場所。マップの左上から順に探すので毎回同じ所になる
   const openLine = (len: number): Vec => {
-    for (let y = 20; y < map.h - 20; y += 3) {
-      for (let x = 20; x < map.w - 20 - len; x += 3) {
+    for (let y = BY0 + 20; y < BY1 - 20; y += 3) {
+      for (let x = BX0 + 20; x < BX1 - 20 - len; x += 3) {
         const q = { x: x + 0.5, y: y + 0.5 };
         if (map.walkable(q.x, q.y) && map.walkable(q.x + len, q.y) && map.walkLine(q, { x: q.x + len, y: q.y }, 1.5)) return q;
       }
@@ -469,7 +473,7 @@ const rich = (): Profile => {
     const e = enemyAt(w, r);
     const solidNow = () => {
       const out: number[] = [];
-      for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) out.push(w.map.solidAt(x, y));
+      for (let y = Math.floor(BY0); y < BY1; y++) for (let x = Math.floor(BX0); x < BX1; x++) out.push(w.map.solidAt(x, y));
       return out;
     };
     const before = solidNow();
@@ -899,18 +903,19 @@ const rich = (): Profile => {
   }
 }
 
-// 区画を出し入れしながら走る。秋葉原は狭いので、読む距離を縮めて捨てる所まで通す
-{
+// 区画を出し入れしながら、マップを左右に往復して走る。12m/s（自転車の速さの見当）
+const streamRun = async (range: StreamRange, label: string) => {
   const m = new GameMap(mapIndex);
-  const streamer = new ChunkStreamer(m, (i, j) => Promise.resolve(readChunk(i, j)), { load: 160, drop: 240, lookahead: 8 });
-  const start = { x: 20, y: 20 };
+  const streamer = new ChunkStreamer(m, (i, j) => Promise.resolve(readChunk(i, j)), range);
+  const start = { x: BX0 + 20, y: BY0 + 20 };
   await streamer.loadAround(start);
   const w = createWorld(m, 3, baseLoadout, start);
   for (const a of w.actors) if (a !== w.player) a.alive = false;
-  // マップを左右に往復しながら下へ進む。12m/s（自転車の速さの見当）
   const speed = 12;
   const legs: Vec[] = [];
-  for (let y = 20, k = 0; y < m.h - 20; y += 110, k++) legs.push({ x: k % 2 ? m.w - 20 : 20, y }, { x: k % 2 ? 20 : m.w - 20, y });
+  for (let y = BY0 + 20, k = 0; y < BY1 - 20; y += 200, k++) {
+    legs.push({ x: k % 2 ? BX1 - 20 : BX0 + 20, y }, { x: k % 2 ? BX0 + 20 : BX1 - 20, y });
+  }
   let leg = 0, ticks = 0, worst = 0, total = 0, missing = 0, maxLoaded = 0;
   // 建物に押し戻されないよう、自分で進めた位置に毎ティック置き直す
   const at = { ...start };
@@ -949,10 +954,12 @@ const rich = (): Profile => {
     }
   }
   console.log(
-    `区画の出し入れ（読む 160m・捨てる 240m）: ${ticks}ティック 読んだ ${streamer.loads}回 捨てた ${streamer.drops}回 同時に持った区画 最大 ${maxLoaded}/${mapIndex.chunks.length}、`
+    `区画の出し入れ（${label}）: ${ticks}ティック 読んだ ${streamer.loads}回 捨てた ${streamer.drops}回 置き場所の取り合い ${m.evictions}回 同時に持った区画 最大 ${maxLoaded}/${mapIndex.chunks.length}、`
       + `周りの区画が間に合わなかった回数 ${missing}　1ティック平均 ${(total / ticks).toFixed(3)}ms 最大 ${worst.toFixed(2)}ms`,
   );
-}
+};
+await streamRun(STREAM_RANGE, `読む ${STREAM_RANGE.load}m・捨てる ${STREAM_RANGE.drop}m`);
+await streamRun({ load: 160, drop: 240, lookahead: 8 }, "読む 160m・捨てる 240m");
 
 // 区画を捨てて読み直すと、同じ敵と箱が出て、倒した敵・開けた箱・拾った物は元に戻らない
 {
@@ -973,12 +980,12 @@ const rich = (): Profile => {
   }
   if (ground) w.loot = w.loot.filter((l) => l !== ground);
   const [i, j] = key.split("_").map(Number);
-  const idle = () => step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 1, y: w.player.pos.y } });
+  // step の始めに揃うのと同じ処理を呼ぶ。step を回すと、置いた敵がそのティックのうちに動いて位置が比べられない
   map.removeChunk(i, j);
-  idle();
+  syncSpawns(w);
   const gone = snap(key);
   map.addChunk(readChunk(i, j));
-  idle();
+  syncSpawns(w);
   const after = snap(key);
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, k) => x === b[k]);
   const expectEnemies = before.enemies.filter((x) => !x.startsWith(`${e.spawn!.n}:`));

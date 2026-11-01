@@ -32,7 +32,7 @@ export type Profile = {
   partners: { model: PartnerModel; enabled: boolean }[];
 };
 
-/** x・y はマップのマス目の座標 */
+/** map はマップの id（public/maps/ の下のディレクトリ名）、x・y はゲームの座標 */
 export type Camp = { map: string; x: number; y: number };
 
 export function defaultProfile(): Profile {
@@ -215,7 +215,8 @@ export function craft(p: Profile, recipeId: string): boolean {
 
 // ---- キャンプ ----
 
-/** そのマップでのキャンプの位置。別のマップのキャンプなら null */
+/** そのマップでのキャンプの位置。別のマップのキャンプなら null。
+ * マップの名前で保存していた頃のキャンプは、座標の決め方が今と違うので、id と一致せず使われない */
 export function campOn(p: Profile, map: string): { x: number; y: number } | null {
   return p.camp && p.camp.map === map ? { x: p.camp.x, y: p.camp.y } : null;
 }

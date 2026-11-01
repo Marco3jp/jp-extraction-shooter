@@ -1,7 +1,7 @@
 """OpenStreetMap の JSON（Overpass の out geom）を、ゲーム用の 1m グリッドのマップに変換する。
 
-細かすぎる模様はならし、似た街並みが続くところは縦横の帯ごと切り詰める。
-大通り・鉄道・公園・大きな建物は「残す場所」として、その縦横の比率を変えない。
+細かすぎる模様はならす。マップ全体を SCALE 倍に縮め、どの地点も自分の緯度・経度だけでゲームの座標が決まる。
+道は実際の幅ではなく、道の種類ごとに決めたゲーム用の幅（ROAD_WIDTH）で描く。
 
 使い方:
   python3 -I tools/osm_to_map.py tools/maps/akihabara.json [--preview preview.png]
@@ -38,6 +38,15 @@ ROAD_WIDTH = {
 MAJOR_ROADS = {"trunk", "primary", "secondary"}
 SKIP_BUILDING = {"roof", "construction"}
 
+# 縮める倍率。ゲームの1マスは、実際の 1 / SCALE m
+SCALE = 0.8
+# ゲームの座標の原点（関東の北西の角）と、経度1度の長さを決める緯度。関東全体で1か所なので、変えるとどのマップの座標も変わる
+ORIGIN_LAT = 37.0
+ORIGIN_LON = 138.4
+REF_LAT = 35.7
+# 区画の一辺（マス）。src/sim/map.ts の CHUNK と揃える
+CHUNK = 128
+
 # ならし
 SMALL_GROUND_PATCH = 30
 SMALL_BUILDING = 20
@@ -48,18 +57,6 @@ NARROW_STRIP = 4
 ENCLOSED_LOT_MAX = 600
 # 塞がったマスに囲まれた空き地のうち、この広さ（㎡）以下は埋める
 POCKET_MAX = 400
-# 残す場所
-LANDMARK_BUILDING_AREA = 4000
-LANDMARK_STATION_AREA = 1000
-LANDMARK_GREEN_AREA = 1000
-LANDMARK_MARGIN = 4
-KEEP_LINE_MIN_LENGTH = 40
-# 縦か横から、この角度（度）以内の線だけを残す。斜めの線で広い範囲が守られてしまうため
-KEEP_LINE_MAX_ANGLE = 20
-# 切り詰め
-ROAD_COLUMN_RATIO = 0.1
-LONG_BLOCK = 36
-SHORT_BLOCK = 28
 
 
 def grid(w, h, v):
@@ -74,21 +71,22 @@ def main():
     elements = [e for e in data["elements"] if e["type"] == "way"]
     nodes = [e for e in data["elements"] if e["type"] == "node"]
 
-    lat0 = (BBOX["south"] + BBOX["north"]) / 2
-    mx = 111320 * math.cos(math.radians(lat0))
-    my = 110574
-    W = int((BBOX["east"] - BBOX["west"]) * mx)
-    H = int((BBOX["north"] - BBOX["south"]) * my)
+    mx = 111320 * math.cos(math.radians(REF_LAT)) * SCALE
+    my = 110574 * SCALE
+    # 範囲を区画の境目まで広げた四角を、変換で使う格子にする。OX・OY はその左上のゲームの座標
+    gx0, gx1 = (BBOX["west"] - ORIGIN_LON) * mx, (BBOX["east"] - ORIGIN_LON) * mx
+    gy0, gy1 = (ORIGIN_LAT - BBOX["north"]) * my, (ORIGIN_LAT - BBOX["south"]) * my
+    OX, OY = math.floor(gx0 / CHUNK) * CHUNK, math.floor(gy0 / CHUNK) * CHUNK
+    W, H = math.ceil(gx1 / CHUNK) * CHUNK - OX, math.ceil(gy1 / CHUNK) * CHUNK - OY
+    inside = (gx0 - OX, gy0 - OY, gx1 - OX, gy1 - OY)
 
     def proj(p):
-        return ((p["lon"] - BBOX["west"]) * mx, (BBOX["north"] - p["lat"]) * my)
+        return ((p["lon"] - ORIGIN_LON) * mx - OX, (ORIGIN_LAT - p["lat"]) * my - OY)
 
     ground = grid(W, H, LOT)
     bid = grid(W, H, -1)
     road = grid(W, H, 0)          # 0: なし 1: 細い道 2: 大通り
     road_dir = grid(W, H, NONE)
-    col_keep = [False] * W
-    row_keep = [False] * H
     buildings = []
 
     def fill_poly(pts, fn):
@@ -127,31 +125,6 @@ def main():
                 if qx * qx + qy * qy <= r * r:
                     fn(x, y)
 
-    def keep_line(pts, width):
-        # 長くまっすぐな区間だけ、その幅を残す（縦なら列、横なら行）
-        for a, b in zip(pts, pts[1:]):
-            dx, dy = b[0] - a[0], b[1] - a[1]
-            if math.hypot(dx, dy) < KEEP_LINE_MIN_LENGTH:
-                continue
-            mx_, my_ = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-            if not (0 <= mx_ < W and 0 <= my_ < H):
-                continue
-            off_axis = math.degrees(math.atan2(min(abs(dx), abs(dy)), max(abs(dx), abs(dy))))
-            if off_axis > KEEP_LINE_MAX_ANGLE:
-                continue
-            if abs(dy) > abs(dx):
-                for x in range(max(0, int(min(a[0], b[0]) - width / 2 - 1)), min(W, int(max(a[0], b[0]) + width / 2 + 2))):
-                    col_keep[x] = True
-            else:
-                for y in range(max(0, int(min(a[1], b[1]) - width / 2 - 1)), min(H, int(max(a[1], b[1]) + width / 2 + 2))):
-                    row_keep[y] = True
-
-    def keep_box(x0, y0, x1, y1):
-        for x in range(max(0, x0 - LANDMARK_MARGIN), min(W, x1 + LANDMARK_MARGIN + 1)):
-            col_keep[x] = True
-        for y in range(max(0, y0 - LANDMARK_MARGIN), min(H, y1 + LANDMARK_MARGIN + 1)):
-            row_keep[y] = True
-
     # ---- 1. 描き込む ----
     zone = grid(W, H, None)
     for e in elements:
@@ -185,7 +158,6 @@ def main():
                 ground[y][x] = VIADUCT
             for a, b in zip(pts, pts[1:]):
                 stroke_seg(a, b, 9, v)
-            keep_line(pts, 9)
 
     road_lines = []
     for e in elements:
@@ -220,8 +192,6 @@ def main():
                     road[y][x] = kind
                     road_dir[y][x] = direction
             stroke_seg(a, b, w, r)
-        if kind == 2:
-            keep_line(pts, w + 3)
 
     for e in elements:
         t = e.get("tags", {})
@@ -249,10 +219,6 @@ def main():
             kind=b, h=h, tags=t, levels=levels, area=len(cells), pois=[],
             cx=sum(p[0] for p in pts) / len(pts), cy=sum(p[1] for p in pts) / len(pts),
         ))
-        if cells and (len(cells) >= LANDMARK_BUILDING_AREA or (b == "train_station" and len(cells) >= LANDMARK_STATION_AREA)):
-            xs = [c[0] for c in cells]
-            ys = [c[1] for c in cells]
-            keep_box(min(xs), min(ys), max(xs), max(ys))
 
     # お店・施設の点を、その点がある建物に結び付ける。歩道に食い込んで建物から外れた点は近くの建物へ
     for n in nodes:
@@ -412,10 +378,6 @@ def main():
                         seen[ny][nx] = True
                         comp.append((nx, ny))
             if len(comp) >= SMALL_GROUND_PATCH:
-                if g == GREEN and len(comp) >= LANDMARK_GREEN_AREA:
-                    xs = [c[0] for c in comp]
-                    ys = [c[1] for c in comp]
-                    keep_box(min(xs), min(ys), max(xs), max(ys))
                 continue
             around = Counter()
             for cx, cy in comp:
@@ -428,68 +390,14 @@ def main():
             for cx, cy in comp:
                 ground[cy][cx] = fill
 
-    # ---- 3. 縮める ----
-    def plan_cuts(n, keep, road_count, threshold):
-        cuts = set()
-        i = 0
-        while i < n:
-            if keep[i]:
-                i += 1
-                continue
-            s = i
-            while i < n and not keep[i]:
-                i += 1
-            e = i
-            # この区間にある、帯と同じ向きの細い道（列なら縦の道）
-            roads = []
-            j = s
-            while j < e:
-                if road_count[j] >= threshold:
-                    rs = j
-                    while j < e and road_count[j] >= threshold:
-                        j += 1
-                    if roads and rs - roads[-1][1] <= 2:
-                        roads[-1] = (roads[-1][0], j)
-                    else:
-                        roads.append((rs, j))
-                else:
-                    j += 1
-            # 同じ向きの道が3本以上並んでいたら、内側の道を1本おきに抜く。
-            # 両隣の街区の真ん中から真ん中までを切るので、残った2つの半分が1つの街区になる
-            if len(roads) >= 3:
-                for k in range(1, len(roads) - 1, 2):
-                    left = (roads[k - 1][1] + roads[k][0]) // 2
-                    right = (roads[k][1] + roads[k + 1][0]) // 2
-                    cuts.update(range(left, right))
-            # 残った長い街区は真ん中を切り詰める
-            j = s
-            while j < e:
-                if j in cuts or road_count[j] >= threshold:
-                    j += 1
-                    continue
-                bs = j
-                while j < e and j not in cuts and road_count[j] < threshold:
-                    j += 1
-                length = j - bs
-                if length > LONG_BLOCK:
-                    remove = length - SHORT_BLOCK
-                    mid = bs + length // 2
-                    cuts.update(range(mid - remove // 2, mid - remove // 2 + remove))
-        return cuts
-
-    col_roads = [sum(1 for y in range(H) if road[y][x] == 1 and road_dir[y][x] == VERT) for x in range(W)]
-    row_roads = [sum(1 for x in range(W) if road[y][x] == 1 and road_dir[y][x] == HORIZ) for y in range(H)]
-    cut_cols = plan_cuts(W, col_keep, col_roads, H * ROAD_COLUMN_RATIO)
-    cut_rows = plan_cuts(H, row_keep, row_roads, W * ROAD_COLUMN_RATIO)
-    keep_cols = [x for x in range(W) if x not in cut_cols]
-    keep_rows = [y for y in range(H) if y not in cut_rows]
-
-    def shrink(g):
-        return [[g[y][x] for x in keep_cols] for y in keep_rows]
-
-    W0, H0 = W, H
-    ground, bid, road, road_dir = shrink(ground), shrink(bid), shrink(road), shrink(road_dir)
-    W, H = len(keep_cols), len(keep_rows)
+    # ---- 3. 範囲の外を落とす ----
+    # 範囲をまたぐ道や建物は外まで描かれているので、範囲の外のマスはここで消す
+    for y in range(H):
+        for x in range(W):
+            if not (inside[0] <= x + 0.5 < inside[2] and inside[1] <= y + 0.5 < inside[3]):
+                ground[y][x] = OUTSIDE
+                bid[y][x] = -1
+                road[y][x] = 0
 
     counts = Counter(v for row in bid for v in row if v >= 0)
     for y in range(H):
@@ -500,7 +408,7 @@ def main():
     solid = grid(W, H, FREE)
     for y in range(H):
         for x in range(W):
-            if bid[y][x] >= 0:
+            if bid[y][x] >= 0 or ground[y][x] == OUTSIDE:
                 solid[y][x] = BUILDING
 
     # ---- 4. 遮蔽物 ----
@@ -592,7 +500,11 @@ def main():
                     else:
                         rest.append((cx, cy))
                 if len(rest) == len(todo):
-                    raise SystemExit(f"建物に接していない閉じた空き地がある: {rest[0]}")
+                    # 範囲の外と遮蔽物だけに囲まれている。範囲の外の扱いにする
+                    for cx, cy in rest:
+                        solid[cy][cx] = BUILDING
+                        ground[cy][cx] = OUTSIDE
+                    break
                 todo = rest
     if wide > 1:
         print(f"警告: {POCKET_MAX}㎡ より広い空き地が {wide} か所あり、互いにつながっていない")
@@ -636,7 +548,7 @@ def main():
         c["id"] = i
 
     features = place_features(
-        cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_lines, buildings, rects_by_b, nodes, proj,
+        cfg, W, H, ground, solid, road_lines, buildings, rects_by_b, nodes, proj,
     )
 
     btype = grid(W, H, None)
@@ -644,11 +556,15 @@ def main():
         for x in range(W):
             if bid[y][x] >= 0:
                 btype[y][x] = buildings[bid[y][x]]["type"]
-    sizes = write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features)
+    def game(lat, lon):
+        return [round((lon - ORIGIN_LON) * mx, 2), round((ORIGIN_LAT - lat) * my, 2)]
+
+    layout = dict(start=game(*cfg["layout"]["start"]), extracts=[game(*e) for e in cfg["layout"]["extracts"]])
+    sizes = write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features)
     print(f"区画 {len(sizes)} 個、1区画 平均 {sum(sizes) / len(sizes) / 1024:.1f}KB・最大 {max(sizes) / 1024:.1f}KB")
     types = Counter(b["type"] for b in out_b)
     m = features["markings"]
-    print(f"{W0}x{H0} → {W}x{H}（列 {len(cut_cols)}・行 {len(cut_rows)} を切り詰め）"
+    print(f"{W}x{H}（左上 {OX},{OY}・{SCALE}倍）"
           f" buildings={len(out_b)} rects={sum(len(b['rects']) for b in out_b)} covers={len(covers)}")
     print("建物の種類:", dict(types.most_common()))
     print(f"横断歩道 {len(m['crosswalks'])} 停止線 {len(m['stops'])} 中央線 {len(m['lines'])} マンホール {len(m['manholes'])}"
@@ -666,7 +582,7 @@ def main():
                 elif solid[y][x] == COVER:
                     raw += bytes((240, 220, 60))
                 else:
-                    raw += bytes(colors[ground[y][x]])
+                    raw += bytes(colors.get(ground[y][x], (20, 20, 24)))
 
         def chunk(tag, body):
             c = struct.pack(">I", len(body)) + tag + body
@@ -678,8 +594,6 @@ def main():
 
 
 
-# 区画の一辺（m）。src/sim/map.ts の CHUNK と揃える
-CHUNK = 128
 # 地面に描く表示は、区画の外のこの距離（m）までのものも入れる。境目をまたぐ横断歩道などを両側の地面に描くため
 PAINT_MARGIN = 8
 # マップの外のマス。src/sim/map.ts の Ground.outside と揃える
@@ -706,24 +620,29 @@ def png_rgba(w, h, rows):
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
-def write_overview(out_dir, W, H, ground, solid):
-    """全体マップ用の絵を OVERVIEW_TILE 四方ずつ書き出す。マップの外は透明にする"""
+def write_overview(out_dir, OX, OY, W, H, ground, solid):
+    """全体マップ用の絵を、ゲームの座標で OVERVIEW_TILE 四方ずつに区切って書き出す。マップの外は透明にする"""
     d = os.path.join(out_dir, "overview")
     os.makedirs(d, exist_ok=True)
     for f in os.listdir(d):
         if f.endswith(".png"):
             os.remove(os.path.join(d, f))
     colors = {k: (round(r * 0.4 + 10), round(g * 0.4 + 10), round(b * 0.4 + 14)) for k, (r, g, b) in OVERVIEW_GROUND.items()}
+    T = OVERVIEW_TILE
     tiles = []
-    for tj in range((H + OVERVIEW_TILE - 1) // OVERVIEW_TILE):
-        for ti in range((W + OVERVIEW_TILE - 1) // OVERVIEW_TILE):
+    for tj in range(OY // T, (OY + H - 1) // T + 1):
+        for ti in range(OX // T, (OX + W - 1) // T + 1):
             rows = []
-            for y in range(tj * OVERVIEW_TILE, (tj + 1) * OVERVIEW_TILE):
+            any_cell = False
+            for gy in range(tj * T, (tj + 1) * T):
                 row = bytearray()
-                for x in range(ti * OVERVIEW_TILE, (ti + 1) * OVERVIEW_TILE):
-                    if x >= W or y >= H:
+                y = gy - OY
+                for gx in range(ti * T, (ti + 1) * T):
+                    x = gx - OX
+                    if not (0 <= x < W and 0 <= y < H) or ground[y][x] == OUTSIDE:
                         row += b"\x00\x00\x00\x00"
                         continue
+                    any_cell = True
                     if solid[y][x] == BUILDING:
                         c = OVERVIEW_BUILDING
                     elif solid[y][x] == COVER:
@@ -732,23 +651,41 @@ def write_overview(out_dir, W, H, ground, solid):
                         c = colors[ground[y][x]]
                     row += bytes((*c, 255))
                 rows.append(bytes(row))
+            if not any_cell:
+                continue
             with open(os.path.join(d, f"{ti}_{tj}.png"), "wb") as f:
-                f.write(png_rgba(OVERVIEW_TILE, OVERVIEW_TILE, rows))
+                f.write(png_rgba(T, T, rows))
             tiles.append([ti, tj])
     return tiles
 
 
-def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
-    """CHUNK 四方の区画ごとに、gzip した JSON を書き出す。建物・遮蔽物・標識は、左上の角や位置がある区画にまるごと入れる"""
+def write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features):
+    """CHUNK 四方の区画ごとに、gzip した JSON を書き出す。建物・遮蔽物・標識は、左上の角や位置がある区画にまるごと入れる。
+    変換の格子の座標に OX・OY を足して、ゲームの座標で書く"""
     out_dir = cfg["out"]
     os.makedirs(out_dir, exist_ok=True)
     for f in os.listdir(out_dir):
         if f.endswith(".json.gz"):
             os.remove(os.path.join(out_dir, f))
-    ni, nj = (W + CHUNK - 1) // CHUNK, (H + CHUNK - 1) // CHUNK
+    I0, J0 = OX // CHUNK, OY // CHUNK
+
+    def rnd(v):
+        return round(v, 2)
+
+    buildings = [dict(b, rects=[[x + OX, y + OY, w, h] for x, y, w, h in b["rects"]]) for b in out_b]
+    covers = [dict(c, x=c["x"] + OX, y=c["y"] + OY) for c in covers]
+    m = features["markings"]
+    marks = dict(
+        crosswalks=[dict(c, x=rnd(c["x"] + OX), y=rnd(c["y"] + OY)) for c in m["crosswalks"]],
+        stops=[dict(c, x=rnd(c["x"] + OX), y=rnd(c["y"] + OY)) for c in m["stops"]],
+        lines=[dict(l, pts=[[rnd(x + OX), rnd(y + OY)] for x, y in l["pts"]]) for l in m["lines"]],
+        manholes=[[rnd(x + OX), rnd(y + OY)] for x, y in m["manholes"]],
+    )
+    signs = [dict(sg, x=rnd(sg["x"] + OX), y=rnd(sg["y"] + OY)) for sg in features["signs"]]
+    areas = [dict(a, x=rnd(a["x"] + OX), y=rnd(a["y"] + OY)) for a in features["areas"]]
 
     def owner(x, y):
-        return (int(x) // CHUNK, int(y) // CHUNK)
+        return (math.floor(x / CHUNK), math.floor(y / CHUNK))
 
     def near(x, y, i, j):
         return i * CHUNK - PAINT_MARGIN <= x < (i + 1) * CHUNK + PAINT_MARGIN and j * CHUNK - PAINT_MARGIN <= y < (j + 1) * CHUNK + PAINT_MARGIN
@@ -759,22 +696,17 @@ def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
         return (min(xs) < (i + 1) * CHUNK + PAINT_MARGIN and max(xs) >= i * CHUNK - PAINT_MARGIN
                 and min(ys) < (j + 1) * CHUNK + PAINT_MARGIN and max(ys) >= j * CHUNK - PAINT_MARGIN)
 
-    m = features["markings"]
     sizes = []
     chunks = []
-    for j in range(nj):
-        for i in range(ni):
+    for lj in range(H // CHUNK):
+        for li in range(W // CHUNK):
+            i, j = I0 + li, J0 + lj
             g = bytearray()
             sd = bytearray()
             types = []
             bt = bytearray()
-            for y in range(j * CHUNK, (j + 1) * CHUNK):
-                for x in range(i * CHUNK, (i + 1) * CHUNK):
-                    if x >= W or y >= H:
-                        g.append(OUTSIDE)
-                        sd.append(BUILDING)
-                        bt.append(0)
-                        continue
+            for y in range(lj * CHUNK, (lj + 1) * CHUNK):
+                for x in range(li * CHUNK, (li + 1) * CHUNK):
                     g.append(ground[y][x])
                     sd.append(solid[y][x])
                     t = btype[y][x]
@@ -784,21 +716,23 @@ def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
                         if t not in types:
                             types.append(t)
                         bt.append(types.index(t) + 1)
+            if all(v == OUTSIDE for v in g):
+                continue
             body = dict(
                 i=i, j=j,
                 ground=base64.b64encode(bytes(g)).decode(),
                 solid=base64.b64encode(bytes(sd)).decode(),
                 types=types,
                 btype=base64.b64encode(bytes(bt)).decode(),
-                buildings=[b for b in out_b if owner(b["rects"][0][0], b["rects"][0][1]) == (i, j)],
+                buildings=[b for b in buildings if owner(b["rects"][0][0], b["rects"][0][1]) == (i, j)],
                 covers=[c for c in covers if owner(c["x"], c["y"]) == (i, j)],
                 markings=dict(
-                    crosswalks=[c for c in m["crosswalks"] if near(c["x"], c["y"], i, j)],
-                    stops=[c for c in m["stops"] if near(c["x"], c["y"], i, j)],
-                    lines=[l for l in m["lines"] if overlaps(l["pts"], i, j)],
-                    manholes=[p for p in m["manholes"] if near(p[0], p[1], i, j)],
+                    crosswalks=[c for c in marks["crosswalks"] if near(c["x"], c["y"], i, j)],
+                    stops=[c for c in marks["stops"] if near(c["x"], c["y"], i, j)],
+                    lines=[l for l in marks["lines"] if overlaps(l["pts"], i, j)],
+                    manholes=[p for p in marks["manholes"] if near(p[0], p[1], i, j)],
                 ),
-                signs=[sg for sg in features["signs"] if owner(sg["x"], sg["y"]) == (i, j)],
+                signs=[sg for sg in signs if owner(sg["x"], sg["y"]) == (i, j)],
             )
             raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
             data = gzip.compress(raw, 9, mtime=0)
@@ -806,15 +740,19 @@ def write_chunks(cfg, W, H, ground, solid, btype, out_b, covers, features):
                 f.write(data)
             sizes.append(len(data))
             chunks.append([i, j])
+    x0, y0, x1, y1 = inside
+
     index = dict(
         id=os.path.basename(os.path.normpath(out_dir)),
         name=cfg["name"],
-        width=W, height=H, chunk=CHUNK,
+        bounds=[rnd(OX + x0), rnd(OY + y0), rnd(OX + x1), rnd(OY + y1)],
+        chunk=CHUNK,
+        scale=SCALE,
         attribution="© OpenStreetMap contributors (ODbL)",
-        layout=cfg["layout"],
-        areas=features["areas"],
+        layout=layout,
+        areas=areas,
         chunks=chunks,
-        overview=dict(tile=OVERVIEW_TILE, tiles=write_overview(out_dir, W, H, ground, solid)),
+        overview=dict(tile=OVERVIEW_TILE, tiles=write_overview(out_dir, OX, OY, W, H, ground, solid)),
     )
     with open(os.path.join(out_dir, "index.json"), "w") as f:
         json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
@@ -838,25 +776,12 @@ PLACE_MARGIN_M = 150
 UNSIGNED_ROADS = {"service", "living_street"}
 
 
-def place_features(cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_lines, buildings, rects_by_b, nodes, proj):
-    """地面の表示・標識・町名を、縮めた後の座標で返す"""
+def place_features(cfg, W, H, ground, solid, road_lines, buildings, rects_by_b, nodes, proj):
+    """地面の表示・標識・町名を、変換の格子の座標で返す"""
     rng = random.Random(cfg["seed"] + 1)
 
-    def axis_map(keep, n0):
-        kept = set(keep)
-        before = [0] * (n0 + 1)
-        for i in range(n0):
-            before[i + 1] = before[i] + (1 if i in kept else 0)
-
-        def f(v):
-            i = min(n0 - 1, max(0, int(math.floor(v))))
-            return before[i] + ((v - i) if i in kept else 0.0)
-        return f
-
-    mx_, my_ = axis_map(keep_cols, W0), axis_map(keep_rows, H0)
-
     def mp(p):
-        return (mx_(p[0]), my_(p[1]))
+        return (p[0], p[1])
 
     def ground_at(p):
         x, y = int(p[0]), int(p[1])
@@ -867,10 +792,7 @@ def place_features(cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_
         return 0 <= x < W and 0 <= y < H and solid[y][x] == FREE and ground[y][x] in (SIDEWALK, LOT)
 
     def mapped_angle(p, u):
-        a = mp(p)
-        b = mp((p[0] + u[0], p[1] + u[1]))
-        dx, dy = b[0] - a[0], b[1] - a[1]
-        return math.atan2(dy, dx) if dx * dx + dy * dy > 0.04 else math.atan2(u[1], u[0])
+        return math.atan2(u[1], u[0])
 
     # 交差点：2本以上の道が同じ点を通る所
     at = {}
@@ -1011,7 +933,7 @@ def place_features(cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_
         name = re.sub(r"[一二三四五六七八九十0-9０-９]+丁目$", "", t["name"]).strip()
         px, py = proj(n)
         # 遠くの町の中心は、マップの端で一番近い町名になってしまうので入れない
-        if not (-PLACE_MARGIN_M <= px <= W0 + PLACE_MARGIN_M and -PLACE_MARGIN_M <= py <= H0 + PLACE_MARGIN_M):
+        if not (-PLACE_MARGIN_M <= px <= W + PLACE_MARGIN_M and -PLACE_MARGIN_M <= py <= H + PLACE_MARGIN_M):
             continue
         x, y = mp((px, py))
         by_name.setdefault(name, []).append((x, y))
