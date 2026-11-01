@@ -43,9 +43,9 @@ const map = new GameMap(json);
     const cx = Math.floor(b.pos.x), cy = Math.floor(b.pos.y);
     let use = "接していない";
     for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-      const bi = map.buildingIndex[cx + dx + (cy + dy) * map.w];
-      if (bi >= 0) {
-        use = BUILDING_USE[map.json.buildings[bi].type];
+      const b = map.buildingAt(cx + dx, cy + dy);
+      if (b) {
+        use = BUILDING_USE[b.type];
         break;
       }
     }

@@ -110,12 +110,10 @@ export class GameMap {
   readonly solid: Uint8Array;
   readonly json: MapJson;
   /** セルごとの建物の番号（json.buildings の添字）。建物でなければ -1 */
-  readonly buildingIndex: Int32Array;
+  private readonly buildingIndex: Int32Array;
 
   /** 読み込んだときの solid。遮蔽物のスキルで書き換えた分を、ランの始めに戻す */
   private baseSolid: Uint8Array;
-  /** 歩いて行けるセル（一番広くつながった範囲）。setReachMain するまでは null */
-  reach: Uint8Array | null = null;
   private gScore: Float32Array;
   private came: Int32Array;
   private stamp: Uint32Array;
@@ -246,45 +244,26 @@ export class GameMap {
     }
   }
 
-  /** 歩いて行けるセルを、一番広くつながった範囲にする。出発地点がどこでも同じ結果になる */
-  setReachMain() {
-    if (this.reach) return;
-    const n = this.w * this.h;
-    const label = new Int32Array(n).fill(-1);
-    let best = -1, bestSize = 0, id = 0;
-    for (let s = 0; s < n; s++) {
-      if (label[s] >= 0 || this.solid[s] !== Solid.free) continue;
-      const q = [s];
-      label[s] = id;
-      let size = 0;
-      while (q.length) {
-        const i = q.pop()!;
-        size++;
-        const x = i % this.w, y = (i / this.w) | 0;
-        const ns = [x > 0 ? i - 1 : -1, x < this.w - 1 ? i + 1 : -1, y > 0 ? i - this.w : -1, y < this.h - 1 ? i + this.w : -1];
-        for (const m of ns) {
-          if (m >= 0 && label[m] < 0 && this.solid[m] === Solid.free) {
-            label[m] = id;
-            q.push(m);
-          }
-        }
-      }
-      if (size > bestSize) {
-        bestSize = size;
-        best = id;
-      }
-      id++;
-    }
-    const mark = new Uint8Array(n);
-    for (let i = 0; i < n; i++) if (label[i] === best) mark[i] = 1;
-    this.reach = mark;
+  /** 歩いて行ける場所か。変換で閉じた空き地を埋めてあるので、空いているマスはどれもつながっている */
+  walkable(x: number, y: number): boolean {
+    return !this.blocked(Math.floor(x), Math.floor(y));
   }
 
-  /** 歩いて行ける場所か */
-  walkable(x: number, y: number): boolean {
-    const cx = Math.floor(x), cy = Math.floor(y);
-    if (this.blocked(cx, cy)) return false;
-    return !this.reach || this.reach[cx + cy * this.w] === 1;
+  solidAt(cx: number, cy: number): number {
+    if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return Solid.building;
+    return this.solid[cx + cy * this.w];
+  }
+
+  /** 遮蔽物のスキルで立てた壁を書き込む。resetSolid で元に戻る */
+  setSolid(cx: number, cy: number, v: number) {
+    this.solid[cx + cy * this.w] = v;
+  }
+
+  /** そのマスの建物。建物でなければ null */
+  buildingAt(cx: number, cy: number): MapJson["buildings"][number] | null {
+    if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) return null;
+    const b = this.buildingIndex[cx + cy * this.w];
+    return b >= 0 ? this.json.buildings[b] : null;
   }
 
   findPath(a: Vec, b: Vec, maxNodes = 30000, avoid?: PathAvoid): Vec[] | null {
@@ -293,7 +272,6 @@ export class GameMap {
     const tx = Math.floor(b.x), ty = Math.floor(b.y);
     if (this.blocked(tx, ty)) return null;
     const start = sx + sy * w, goal = tx + ty * w;
-    if (this.reach && !this.reach[goal]) return null;
     const gen = ++this.gen;
     const heap = this.heap;
     heap.clear();

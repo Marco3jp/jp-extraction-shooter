@@ -417,7 +417,7 @@ export class Renderer {
       const k = Math.max(0, b.hp / BARRIER.hp);
       for (const c of b.cells) {
         if (bi >= 64) break;
-        this.dummy.position.set((c % w.map.w) + 0.5, 0, Math.floor(c / w.map.w) + 0.5);
+        this.dummy.position.set(c.x + 0.5, 0, c.y + 0.5);
         this.dummy.rotation.set(0, 0, 0);
         this.dummy.scale.setScalar(1);
         this.dummy.updateMatrix();

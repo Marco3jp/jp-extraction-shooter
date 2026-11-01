@@ -43,6 +43,8 @@ ENCLOSED_LOT_MIN = 40
 # 建物と建物・歩道に挟まれた、この幅（m）以下の空き地は建物を伸ばして埋める
 NARROW_STRIP = 4
 ENCLOSED_LOT_MAX = 600
+# 塞がったマスに囲まれた空き地のうち、この広さ（㎡）以下は埋める
+POCKET_MAX = 400
 # 残す場所
 LANDMARK_BUILDING_AREA = 4000
 LANDMARK_STATION_AREA = 1000
@@ -554,6 +556,43 @@ def main():
                 place(x, y, 3, 1, "barrier")
             else:
                 place(x, y, 1, 3, "barrier")
+
+    # 塞がったマスに囲まれて入れない空き地は、隣の建物を広げて埋める。ゲームは敵や箱を置く場所を、空いたマスから選ぶだけで決めている
+    seen = grid(W, H, False)
+    wide = 0
+    for y in range(H):
+        for x in range(W):
+            if seen[y][x] or solid[y][x] != FREE:
+                continue
+            comp = [(x, y)]
+            seen[y][x] = True
+            k = 0
+            while k < len(comp):
+                cx, cy = comp[k]
+                k += 1
+                for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                    if 0 <= nx < W and 0 <= ny < H and not seen[ny][nx] and solid[ny][nx] == FREE:
+                        seen[ny][nx] = True
+                        comp.append((nx, ny))
+            if len(comp) > POCKET_MAX:
+                wide += 1
+                continue
+            todo = comp
+            while todo:
+                rest = []
+                for cx, cy in todo:
+                    around = [bid[ny][nx] for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1))
+                              if 0 <= nx < W and 0 <= ny < H and bid[ny][nx] >= 0]
+                    if around:
+                        bid[cy][cx] = around[0]
+                        solid[cy][cx] = BUILDING
+                    else:
+                        rest.append((cx, cy))
+                if len(rest) == len(todo):
+                    raise SystemExit(f"建物に接していない閉じた空き地がある: {rest[0]}")
+                todo = rest
+    if wide > 1:
+        print(f"警告: {POCKET_MAX}㎡ より広い空き地が {wide} か所あり、互いにつながっていない")
 
     # 建物ごとに長方形へまとめる（描画用）
     rects_by_b = {}

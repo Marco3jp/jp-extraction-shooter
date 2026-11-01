@@ -103,7 +103,7 @@ export class MapView {
     ctx.fillStyle = "#9ab8d0";
     for (const b of w.barriers) {
       for (const c of b.cells) {
-        const s = toS({ x: c % this.map.w, y: Math.floor(c / this.map.w) });
+        const s = toS(c);
         ctx.fillRect(s.x, s.y, Math.max(2, scale), Math.max(2, scale));
       }
     }

@@ -181,8 +181,8 @@ export type Fire = {
   tickT: number;
 };
 
-/** 遮蔽物のスキルで立てた壁。cells は map.solid の添字 */
-export type Barrier = { id: number; owner: number; cells: number[]; hp: number; until: number };
+/** 遮蔽物のスキルで立てた壁。cells はマスの座標 */
+export type Barrier = { id: number; owner: number; cells: Vec[]; hp: number; until: number };
 
 export type Rail = { id: number; owner: number; a: Vec; b: Vec; until: number };
 
@@ -371,7 +371,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const rng = new Rng(seed);
   const W = map.w;
 
-  const nearestFree = (px: number, py: number, mask: Uint8Array): Vec => {
+  const nearestFree = (px: number, py: number): Vec => {
     const tx = Math.floor(px), ty = Math.floor(py);
     for (let r = 0; r < 300; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -379,7 +379,6 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           const x = tx + dx, y = ty + dy;
           if (map.blocked(x, y)) continue;
-          if (!mask[x + y * W]) continue;
           if (map.blocked(x + 1, y) || map.blocked(x - 1, y) || map.blocked(x, y + 1) || map.blocked(x, y - 1)) continue;
           return { x: x + 0.5, y: y + 0.5 };
         }
@@ -390,24 +389,22 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
 
   map.resetSolid();
   const layout = map.json.layout;
-  map.setReachMain();
-  const reach = map.reach!;
   const startPos = start
-    ? nearestFree(start.x, start.y, reach)
-    : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h, reach);
+    ? nearestFree(start.x, start.y)
+    : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h);
   const extracts: Extract[] = layout.extracts.map(([fx, fy]) => ({
-    pos: nearestFree(fx * map.w, fy * map.h, reach), readyAt: null, ready: false, progress: 0,
+    pos: nearestFree(fx * map.w, fy * map.h), readyAt: null, ready: false, progress: 0,
   }));
 
   const freeCells: number[] = [];
   const wallSideCells: number[] = [];
-  for (let i = 0; i < reach.length; i++) {
-    if (!reach[i]) continue;
-    const x = i % W, y = (i / W) | 0;
-    if (x < 2 || y < 2 || x >= map.w - 2 || y >= map.h - 2) continue;
-    freeCells.push(i);
-    if (map.solid[i + 1] === Solid.building || map.solid[i - 1] === Solid.building || map.solid[i + W] === Solid.building || map.solid[i - W] === Solid.building) {
-      wallSideCells.push(i);
+  const isBuilding = (x: number, y: number) => map.solidAt(x, y) === Solid.building;
+  for (let y = 2; y < map.h - 2; y++) {
+    for (let x = 2; x < map.w - 2; x++) {
+      if (map.blocked(x, y)) continue;
+      const i = x + y * W;
+      freeCells.push(i);
+      if (isBuilding(x + 1, y) || isBuilding(x - 1, y) || isBuilding(x, y + 1) || isBuilding(x, y - 1)) wallSideCells.push(i);
     }
   }
   const cellPos = (i: number): Vec => ({ x: (i % W) + 0.5, y: ((i / W) | 0) + 0.5 });
@@ -503,14 +500,16 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   const lootAt = (p: Vec, d: number) => loot.some((l) => dist(l.pos, p) < d);
   /** 箱が接している建物の用途に合わせた、出やすさの倍率 */
   const tiltAt = (i: number) => {
-    for (const n of [i - W, i + W, i - 1, i + 1]) {
-      const b = map.buildingIndex[n];
-      if (b >= 0) return LOOT_TILT[BUILDING_USE[map.json.buildings[b].type]] ?? {};
+    const x = i % W, y = (i / W) | 0;
+    for (const [nx, ny] of [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]) {
+      const b = map.buildingAt(nx, ny);
+      if (b) return LOOT_TILT[BUILDING_USE[b.type]] ?? {};
     }
     return {};
   };
   const wallAngle = (i: number) => {
-    if (map.solid[i - W] === Solid.building || map.solid[i + W] === Solid.building) return 0;
+    const x = i % W, y = (i / W) | 0;
+    if (isBuilding(x, y - 1) || isBuilding(x, y + 1)) return 0;
     return Math.PI / 2;
   };
 
@@ -558,7 +557,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   for (const { index, model } of loadout.partners) {
     const slot = PARTNER_SLOTS[index % PARTNER_SLOTS.length];
     const ang = player.facing + (slot.angle * Math.PI) / 180;
-    const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist, reach);
+    const pos = nearestFree(startPos.x + Math.cos(ang) * slot.dist, startPos.y + Math.sin(ang) * slot.dist);
     actors.push(makePartner(nextId++, index, model, pos));
   }
 

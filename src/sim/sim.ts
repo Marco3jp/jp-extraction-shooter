@@ -377,7 +377,7 @@ function updateBullets(w: World, byId: Map<number, Actor>) {
         // 当たった位置から少し進めた所が、塞がっているマス
         const sp = Math.hypot(b.vel.x, b.vel.y) || 1;
         const cx = Math.floor(at.x + (b.vel.x / sp) * 0.01), cy = Math.floor(at.y + (b.vel.y / sp) * 0.01);
-        if (w.barriers.length) hitBarrier(w, cx + cy * w.map.w, b.damage);
+        if (w.barriers.length) hitBarrier(w, cx, cy, b.damage);
       }
       continue;
     }

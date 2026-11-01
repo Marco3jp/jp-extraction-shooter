@@ -206,7 +206,7 @@ function placeBarrier(w: World, a: Actor, aim: Vec): boolean {
   }
   const alongX = Math.abs(Math.sin(ang)) > Math.abs(Math.cos(ang));
   const cx = Math.floor(at.x), cy = Math.floor(at.y);
-  const cells: number[] = [];
+  const cells: Vec[] = [];
   const half = Math.floor(BARRIER.length / 2);
   for (let i = -half; i < BARRIER.length - half; i++) {
     const x = alongX ? cx + i : cx, y = alongX ? cy : cy + i;
@@ -217,10 +217,10 @@ function placeBarrier(w: World, a: Actor, aim: Vec): boolean {
       return Math.hypot(o.pos.x - qx, o.pos.y - qy) < o.radius + 0.05;
     });
     if (occupied) continue;
-    cells.push(x + y * map.w);
+    cells.push({ x, y });
   }
   if (!cells.length) return false;
-  for (const c of cells) map.solid[c] = Solid.cover;
+  for (const c of cells) map.setSolid(c.x, c.y, Solid.cover);
   w.barriers.push({ id: w.nextId++, owner: a.id, cells, hp: BARRIER.hp, until: w.time + BARRIER.duration });
   repathAll(w);
   return true;
@@ -229,18 +229,18 @@ function placeBarrier(w: World, a: Actor, aim: Vec): boolean {
 function removeBarrier(w: World, id: number, broken: boolean) {
   const b = w.barriers.find((x) => x.id === id);
   if (!b) return;
-  for (const c of b.cells) w.map.solid[c] = Solid.free;
+  for (const c of b.cells) w.map.setSolid(c.x, c.y, Solid.free);
   w.barriers = w.barriers.filter((x) => x !== b);
   repathAll(w);
   if (broken) {
     const c = b.cells[b.cells.length >> 1];
-    w.events.push({ type: "barrierBreak", pos: { x: (c % w.map.w) + 0.5, y: Math.floor(c / w.map.w) + 0.5 } });
+    w.events.push({ type: "barrierBreak", pos: { x: c.x + 0.5, y: c.y + 0.5 } });
   }
 }
 
 /** 弾が塞がったマスに当たったとき。そこが壁なら耐久を減らす */
-export function hitBarrier(w: World, cell: number, damage: number) {
-  const b = w.barriers.find((x) => x.cells.includes(cell));
+export function hitBarrier(w: World, cx: number, cy: number, damage: number) {
+  const b = w.barriers.find((x) => x.cells.some((c) => c.x === cx && c.y === cy));
   if (!b) return;
   b.hp -= damage;
   if (b.hp <= 0) removeBarrier(w, b.id, true);
