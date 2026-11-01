@@ -234,7 +234,7 @@ export function raiseWall(w: World, owner: number, cx: number, cy: number, along
   }
   if (!cells.length) return false;
   for (const c of cells) map.setSolid(c.x, c.y, Solid.cover);
-  w.barriers.push({ id: w.nextId++, owner, cells, hp, until });
+  w.barriers.push({ id: w.nextId++, owner, cells, hp, maxHp: hp, until });
   repathAll(w);
   return true;
 }

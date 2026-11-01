@@ -191,8 +191,8 @@ export type Fire = {
   tickT: number;
 };
 
-/** 遮蔽物のスキルで立てた壁。cells はマスの座標 */
-export type Barrier = { id: number; owner: number; cells: Vec[]; hp: number; until: number };
+/** 遮蔽物のスキルで立てた壁。cells はマスの座標、maxHp は立てたときの耐久 */
+export type Barrier = { id: number; owner: number; cells: Vec[]; hp: number; maxHp: number; until: number };
 
 /** owner が null なら地図に置いた固定レールで、chunk の区画と一緒に置き、外す */
 export type Rail = { id: number; owner: number | null; chunk: string | null; a: Vec; b: Vec; until: number };

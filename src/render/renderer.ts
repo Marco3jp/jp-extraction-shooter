@@ -121,6 +121,17 @@ const LOOT_REDRAW_MOVE = 24;
 const MAX_BINS = 400;
 const MAX_DEATHBOXES = 100;
 const MAX_MARKERS = MAX_BINS + MAX_DEATHBOXES;
+/** 一度に描ける壁のマス。脱出の防衛で立つ壁だけで 40 マス近くある */
+const MAX_BARRIER_CELLS = 256;
+
+/** 人やセンサーの見た目は1つずつ形と材質を作っているので、外すときに GPU の分も捨てる */
+function disposeTree(root: THREE.Object3D) {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    o.geometry.dispose();
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.dispose();
+  });
+}
 
 function glowTexture() {
   const c = document.createElement("canvas");
@@ -385,13 +396,13 @@ export class Renderer {
     this.barrierMesh = instanced(
       new THREE.BoxGeometry(0.96, BARRIER.height, 0.96).translate(0, BARRIER.height / 2, 0),
       new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
-      64,
+      MAX_BARRIER_CELLS,
     );
     // 建物の向こうに立てても見えるように、隠れた所だけ薄く重ねて描く
     this.barrierGhost = new THREE.InstancedMesh(
       this.barrierMesh.geometry,
       new THREE.MeshBasicMaterial({ color: 0x9ad8ff, transparent: true, opacity: 0.3, depthWrite: false, depthFunc: THREE.GreaterDepth }),
-      64,
+      MAX_BARRIER_CELLS,
     );
     this.barrierGhost.instanceMatrix = this.barrierMesh.instanceMatrix;
     this.barrierGhost.frustumCulled = false;
@@ -524,9 +535,9 @@ export class Renderer {
     const col = new THREE.Color();
     let bi = 0;
     for (const b of w.barriers) {
-      const k = Math.max(0, b.hp / BARRIER.hp);
+      const k = Math.max(0, b.hp / b.maxHp);
       for (const c of b.cells) {
-        if (bi >= 64) break;
+        if (bi >= MAX_BARRIER_CELLS) break;
         this.dummy.position.set(c.x + 0.5, 0, c.y + 0.5);
         this.dummy.rotation.set(0, 0, 0);
         this.dummy.scale.setScalar(1);
@@ -711,13 +722,26 @@ export class Renderer {
   }
 
   reset() {
-    for (const v of this.actorViews.values()) this.scene.remove(v.group);
+    for (const v of this.actorViews.values()) {
+      this.scene.remove(v.group);
+      disposeTree(v.group);
+    }
     this.actorViews.clear();
+    this.actorsSeen = null;
+    // 設置物の番号はランごとに振り直すので、前のランの見た目を残すと別の設置物に使い回してしまう
+    for (const v of this.sensorViews.values()) {
+      this.scene.remove(v.group);
+      disposeTree(v.group);
+    }
+    this.sensorViews.clear();
     this.particles = [];
     this.camInit = false;
     this.lootVersion = -1;
     this.buildAll = true;
-    for (const sw of this.shockwaves) this.scene.remove(sw.mesh);
+    for (const sw of this.shockwaves) {
+      this.scene.remove(sw.mesh);
+      disposeTree(sw.mesh);
+    }
     this.shockwaves = [];
   }
 
@@ -779,6 +803,7 @@ export class Renderer {
     for (const [id, v] of this.sensorViews) {
       if (ids.has(id)) continue;
       this.scene.remove(v.group);
+      disposeTree(v.group);
       this.sensorViews.delete(id);
     }
   }
@@ -1066,6 +1091,7 @@ export class Renderer {
       for (const [id, v] of this.actorViews) {
         if (ids.has(id)) continue;
         this.scene.remove(v.group);
+        disposeTree(v.group);
         this.actorViews.delete(id);
       }
     }
