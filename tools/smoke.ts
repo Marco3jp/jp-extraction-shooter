@@ -10,6 +10,7 @@ import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
 import { GameMap, type MapJson } from "../src/sim/map";
+import { Rng } from "../src/sim/rng";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
 import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutWeapon, type Profile } from "../src/meta/profile";
@@ -217,8 +218,9 @@ const rich = (): Profile => {
   const e = w.actors.find((a) => a.ai)!;
   // 見通しのいい場所で、10m 先に敵を1人置く
   let spot = null;
+  const spotRng = new Rng(7);
   for (let tries = 0; tries < 2000 && !spot; tries++) {
-    const q = { x: 20 + Math.random() * (map.w - 40), y: 20 + Math.random() * (map.h - 40) };
+    const q = { x: 20 + spotRng.next() * (map.w - 40), y: 20 + spotRng.next() * (map.h - 40) };
     const r = { x: q.x + 10, y: q.y };
     if (map.walkable(q.x, q.y) && map.walkable(r.x, r.y) && map.walkLine(q, r, 1.5)) spot = [q, r];
   }
