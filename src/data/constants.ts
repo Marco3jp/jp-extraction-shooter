@@ -46,8 +46,12 @@ export const CAMP_RADIUS = 250;
 export const PICKUP_RANGE = 2.2;
 /** 開いた箱から離れたら閉じる距離 */
 export const LOOT_PANEL_RANGE = 3.2;
-/** 銃声が聞こえる距離 */
+/** 銃声を聞いた敵が、撃った相手を狙って寄ってくる距離 */
 export const HEAR_RANGE = 35;
+/** 敵に銃声が届く距離。HEAR_RANGE より遠くで聞いた敵は、撃った相手を決めずに撃ち合っている所へ寄る */
+export const SHOT_HEAR_RANGE = 100;
+/** プレイヤーに銃声が届く距離。ミニマップの輪・画面の端の波・効果音で知らせ、遠いほど弱くする */
+export const SHOT_NOTICE_RANGE = 160;
 
 /**
  * 理論 TTK の下限。これを下回る武器・アタッチメントの組み合わせは、連射速度を下げて揃える。

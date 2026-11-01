@@ -1,7 +1,7 @@
 import {
   EVAC, FIXED_RAIL, EXTRACT_CALL_TIME, EXTRACT_DEFENSE, EXTRACT_RADIUS, EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SECURABLE, SHIELD_PER_CELL,
   BIKE_DISMOUNT, BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
-  DEVICES, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
+  DEVICES, SHOT_NOTICE_RANGE, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
 import { deviceNear } from "./sim/devices";
 import { buffsOf, canGiveBuff, GIVE_RANGE } from "./sim/buffs";
@@ -31,7 +31,7 @@ const THROW_ORDER: [ThrowableId, string][] = [
 ];
 
 const LEVEL_NAMES = ["なし", "影", "影＋型", "影＋型＋体力"];
-const PING_RANGE = 160;
+const EDGE_WAVE_LIFE = 1.1;
 const FEED_LIFE = 6;
 /** 撃った・撃たれてからこの秒数は戦闘中として、町名の表示を待たせる */
 const COMBAT_HOLD = 6;
@@ -279,15 +279,16 @@ export class Hud {
           break;
         }
         case "shot": {
-          if (ev.faction === PLAYER_FACTION) {
+          const ours = byId.get(ev.actor)?.team === "device";
+          if (ev.faction === PLAYER_FACTION && !ours) {
             this.lastCombatT = w.time;
             break;
           }
           const d = Math.hypot(ev.pos.x - p.pos.x, ev.pos.y - p.pos.y);
           const last = this.lastPing.get(ev.actor) ?? -10;
-          if (d < PING_RANGE && w.time - last > 0.7) {
+          if (d < SHOT_NOTICE_RANGE && w.time - last > 0.7) {
             this.lastPing.set(ev.actor, w.time);
-            this.pings.push({ pos: { ...ev.pos }, t: w.time });
+            this.pings.push({ pos: { ...ev.pos }, t: w.time, k: 1 - d / SHOT_NOTICE_RANGE, ours });
           }
           break;
         }
@@ -523,6 +524,7 @@ export class Hud {
     this.setHtml($("#feed"), this.feed.map((f) => `<div>${f.text}</div>`).join(""));
 
     this.mapView.drawMini($<HTMLCanvasElement>("#minimap"), w, this.pings);
+    this.drawEdgeWaves(w, r);
     this.updatePick(w, mouse);
     const big = $("#bigmap");
     big.style.display = this.bigMap ? "flex" : "none";
@@ -761,6 +763,48 @@ export class Hud {
     layer.appendChild(tag);
     this.tags.push(tag);
     return tag;
+  }
+
+  /** 画面に映っていない所の銃声を、その方向の画面の端に波で出す。近いほど濃く大きい */
+  private drawEdgeWaves(w: World, r: Renderer) {
+    const c = $<HTMLCanvasElement>("#edge-sound");
+    const W = window.innerWidth, H = window.innerHeight;
+    if (c.width !== W || c.height !== H) {
+      c.width = W;
+      c.height = H;
+    }
+    const ctx = c.getContext("2d")!;
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H / 2;
+    for (const pg of this.pings) {
+      const age = w.time - pg.t;
+      if (age < 0 || age > EDGE_WAVE_LIFE) continue;
+      const s = r.worldToScreen(pg.pos.x, pg.pos.y, 1);
+      if (s.x >= 0 && s.x <= W && s.y >= 0 && s.y <= H) continue;
+      const dx = s.x - cx, dy = s.y - cy;
+      const t = Math.min(cx / Math.abs(dx || 1e-6), cy / Math.abs(dy || 1e-6));
+      const ex = cx + dx * t, ey = cy + dy * t;
+      const fade = 1 - age / EDGE_WAVE_LIFE;
+      const a = (0.2 + 0.8 * pg.k) * fade;
+      const rgb = pg.ours ? "90, 170, 255" : "255, 80, 55";
+      const glow = 50 + 130 * pg.k;
+      const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, glow);
+      g.addColorStop(0, `rgba(${rgb}, ${a * 0.55})`);
+      g.addColorStop(1, `rgba(${rgb}, 0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(ex, ey, glow, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 2 + 4 * pg.k;
+      for (let i = 0; i < 3; i++) {
+        const rr = (age / EDGE_WAVE_LIFE) * (70 + 150 * pg.k) - i * 22;
+        if (rr <= 0) continue;
+        ctx.strokeStyle = `rgba(${rgb}, ${a * (1 - i * 0.3)})`;
+        ctx.beginPath();
+        ctx.arc(ex, ey, rr, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
   }
 
   /** 迎えを待つ間の残り時間と、送った割合。バーは送れる上限（secureShare）を端にする */

@@ -1,3 +1,4 @@
+import { SHOT_NOTICE_RANGE } from "./sim/data";
 import type { GameEvent, World } from "./sim/world";
 
 export class Sfx {
@@ -91,11 +92,13 @@ export class Sfx {
       switch (ev.type) {
         case "shot": {
           const mine = ev.actor === p.id;
-          const v = mine ? 0.5 : near(ev.pos, 60) * 0.3;
+          // 遠いほど小さく、高い音を削ってこもらせる
+          const k = Math.max(0, 1 - Math.hypot(ev.pos.x - p.pos.x, ev.pos.y - p.pos.y) / SHOT_NOTICE_RANGE);
+          const v = mine ? 0.5 : 0.32 * k * k;
           // 1ティックに鳴らす数は、聞こえる銃声だけで数える
-          if (v <= 0 || shots >= 4) break;
+          if (v <= 0.003 || shots >= 4) break;
           shots++;
-          this.burst(0.09, mine ? 1400 : 900, v, 0.8);
+          this.burst(0.09, mine ? 1400 : 450 + 550 * k, v, 0.8);
           break;
         }
         case "hit": {

@@ -7,7 +7,7 @@ import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
-  BEACON_RADIUS, BIKE_ACCEL, DASH, DT, FIXED_RAIL, ENEMY_ACTIVE_RANGE, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
+  BEACON_RADIUS, BIKE_ACCEL, DASH, DT, FIXED_RAIL, ENEMY_ACTIVE_RANGE, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, SHOT_HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
   SECURABLE, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
@@ -472,7 +472,9 @@ function hearShots(w: World, byId: Map<number, Actor>) {
     if (!shooter) continue;
     for (const e of w.actors) {
       if (!e.ai || !e.alive || e.ai.canSee || !hostile(e, shooter)) continue;
-      if (dist(e.pos, ev.pos) < HEAR_RANGE) alert(w, e, ev.pos, shooter, false);
+      const d = dist(e.pos, ev.pos);
+      if (d < HEAR_RANGE) alert(w, e, ev.pos, shooter, false);
+      else if (d < SHOT_HEAR_RANGE && e.team === "enemy") alert(w, e, ev.pos, null, false);
     }
   }
 }

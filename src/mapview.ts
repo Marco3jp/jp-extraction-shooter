@@ -4,7 +4,8 @@ import type { Actor, Extract, World } from "./sim/world";
 import { PARTNER_COLOR, TYPE_COLORS, extractColor } from "./render/renderer";
 import { overviewTile } from "./maploader";
 
-export type Ping = { pos: Vec; t: number };
+/** 銃声。k は届いたときの強さ（近いほど 1）、ours はタレットの銃声 */
+export type Ping = { pos: Vec; t: number; k: number; ours: boolean };
 
 /** 長距離移動の行き先を選んでいる間に描くもの。hover はカーソルが指している所、ok はそこへ飛べるか */
 export type EvacPick = { hover: Vec | null; ok: boolean };
@@ -155,7 +156,7 @@ export class MapView {
       if (age < 0 || age > PING_LIFE) continue;
       const s = toS(ping.pos);
       const k = age / PING_LIFE;
-      ctx.strokeStyle = `rgba(255, 80, 60, ${1 - k})`;
+      ctx.strokeStyle = ping.ours ? `rgba(90, 170, 255, ${1 - k})` : `rgba(255, 80, 60, ${1 - k})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(s.x, s.y, Math.max(3, (3 + k * 10) * (mini ? 1 : 1.4)), 0, Math.PI * 2);

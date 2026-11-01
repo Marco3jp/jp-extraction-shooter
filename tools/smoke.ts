@@ -17,7 +17,7 @@ import { bagAdd, bagCount, bagRemove, bagUsed } from "../src/sim/inventory";
 import { CHUNK, GameMap, decodeChunk, type ChunkJson, type LoadedChunk, type MapIndex } from "../src/sim/map";
 import { ChunkStreamer, STREAM_RANGE, type StreamRange } from "../src/stream";
 import { Rng } from "../src/sim/rng";
-import { syncSpawns } from "../src/sim/spawn";
+import { makeEnemy, syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
 import {
@@ -1541,6 +1541,58 @@ section("設置物", () => {
       + `タレットが 15m 先の敵を倒すまで ${target.alive ? "倒せない" : `${killT.toFixed(1)}秒`}・${turretShots}発（${duel}）、${DEVICE_ACTIVE_RANGE}m より離れたときに撃った ${farShots}発、`
       + `保管庫 手持ち ${prof.devices.sensor}・${prof.devices.turret} 置いている ${prof.placed.length}個、次のランの設置物 ${devices2}個（タレット ${turrets2}）、壊した後 ${w2.devices.length}個・結果 ${w2.outcome}`,
   );
+});
+
+section("銃声で寄ってくる敵", () => {
+  // タレットと勢力Aの1人が撃ち合っている所へ、70m 先の勢力Bの3人組が寄ってきて、勢力Aと撃ち合うか
+  for (const seed of [1, 2, 3]) {
+    const prof = defaultProfile();
+    prof.devices = { sensor: 0, turret: 1 };
+    const w = createWorld(map, seed, makeRunLoadout(prof, map.index.id));
+    const p = w.player;
+    for (const a of w.actors) if (a.team === "enemy") a.alive = false;
+    w.actors = w.actors.filter((a) => a.alive);
+    const rng = new Rng(seed);
+    const free = (from: Vec, r: number, see: boolean): Vec | null => {
+      for (let k = 0; k < 400; k++) {
+        const a = rng.range(-Math.PI, Math.PI);
+        const q = { x: from.x + Math.cos(a) * r, y: from.y + Math.sin(a) * r };
+        if (w.map.walkable(q.x, q.y) && w.map.los(from, q) === see) return q;
+      }
+      return null;
+    };
+    step(w, { ...emptyInput(), place: "turret", aim: { x: p.pos.x + 1, y: p.pos.y } });
+    const t = w.actors.find((a) => a.team === "device")!;
+    const aPos = free(t.pos, 15, true), bPos = free(t.pos, 70, false), pPos = free(t.pos, 40, false);
+    if (!aPos || !bPos || !pPos) {
+      console.log(`銃声で寄ってくる敵 seed=${seed}: 置き場所が見つからない`);
+      continue;
+    }
+    p.pos = { ...pPos };
+    const a = makeEnemy(w, rng, "mid", 1, aPos, 9001, false);
+    w.actors.push(a);
+    const bs = (["short", "mid", "long"] as const).map((kind) => makeEnemy(w, rng, kind, 2, { x: bPos.x + rng.range(-2, 2), y: bPos.y + rng.range(-2, 2) }, 9002, false));
+    w.actors.push(...bs);
+    let near35 = -1, bToA = 0, aToB = 0, bToTurret = 0, bToPlayer = 0, minD = Infinity;
+    for (let i = 0; i < 30 * 40; i++) {
+      p.invulnT = 1;
+      step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+      for (const ev of w.events) {
+        if (ev.type !== "hit") continue;
+        if (ev.actor === a.id && bs.some((b) => b.id === ev.by)) bToA += ev.amount;
+        if (ev.by === a.id && bs.some((b) => b.id === ev.actor)) aToB += ev.amount;
+        if (ev.actor === t.id && bs.some((b) => b.id === ev.by)) bToTurret += ev.amount;
+        if (ev.actor === p.id && bs.some((b) => b.id === ev.by)) bToPlayer += ev.amount;
+      }
+      const d = Math.min(...bs.filter((b) => b.alive).map((b) => Math.hypot(b.pos.x - t.pos.x, b.pos.y - t.pos.y)));
+      minD = Math.min(minD, d);
+      if (near35 < 0 && d < 35) near35 = i * DT;
+    }
+    console.log(
+      `銃声で寄ってくる敵 seed=${seed}: 70m 先の3人組がタレットの 35m 内に来るまで ${near35 < 0 ? "来ない" : `${near35.toFixed(1)}秒`}（一番近づいた ${minD.toFixed(0)}m）、`
+        + `3人組から勢力Aへのダメージ ${Math.round(bToA)}・勢力Aから3人組へ ${Math.round(aToB)}・3人組からタレットへ ${Math.round(bToTurret)}・3人組からプレイヤーへ ${Math.round(bToPlayer)}、40秒後 勢力A ${a.alive ? "生きている" : "倒れた"}・3人組の生き残り ${bs.filter((b) => b.alive).length}人・タレット ${t.alive ? "残っている" : "壊れた"}`,
+    );
+  }
 });
 
 type Done = { k: number; out: string; error?: string; ms: number };
