@@ -1,15 +1,16 @@
 import {
-  EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SHIELD_PER_CELL,
+  EVAC, EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SECURABLE, SHIELD_PER_CELL,
   BIKE_DISMOUNT, BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
   type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
 import { buffsOf, canGiveBuff, GIVE_RANGE } from "./sim/buffs";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
 import { downedPartnerNear, extractAt, nearestLoot, type Command } from "./sim/sim";
+import { evacBlocker } from "./sim/evac";
 import { nearRail } from "./sim/skills";
 import type { Actor, Extract, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
-import { MapView, type Ping } from "./mapview";
+import { MapView, type EvacPick, type Ping } from "./mapview";
 import { itemIcon, kitIcon } from "./ui/icons";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -19,6 +20,8 @@ const HEAL_ORDER: [HealKind, string][] = [
   ["cellBatch", "4"],
   ["medSmall", "5"],
   ["medLarge", "6"],
+  ["ultCharge", "7"],
+  ["evac", "8"],
 ];
 
 const THROW_ORDER: [ThrowableId, string][] = [
@@ -85,6 +88,11 @@ export class Hud {
   /** インベントリ画面。lootId があれば箱の中身も並べる */
   panel = { open: false, lootId: null as number | null, byTab: false };
   bigMap = false;
+  /** 長距離移動の行き先を選ぶために、全体マップを開いたか */
+  private pickOpened = false;
+  private pick: EvacPick | null = null;
+  /** 死んでも持ち帰れる枠があるか。無ければカバンの物をクリックしても何もしない */
+  private hasSecure = false;
   onCommand: (c: Command) => void = () => {};
 
   constructor(world: World, mapView: MapView) {
@@ -107,6 +115,13 @@ export class Hud {
       d.innerHTML = `<span class="key">${key}</span><span class="ic">${itemIcon(id, 26)}</span><span class="name">${THROWABLES[id].name}</span><span class="count"></span>`;
       items.appendChild(d);
     }
+    const revive = document.createElement("div");
+    revive.className = "item revive";
+    revive.dataset.item = "revive";
+    revive.title = "死んだら自動で使い、その場で立ち上がる。拾った分を先に使う";
+    revive.style.setProperty("--c", stackColor({ item: "revive", count: 1 }));
+    revive.innerHTML = `<span class="key">自動</span><span class="ic">${itemIcon("revive", 26)}</span><span class="name">蘇生</span><span class="count"></span>`;
+    items.appendChild(revive);
     const dash = document.createElement("div");
     dash.className = "item dash";
     dash.innerHTML = `<span class="key">Space</span><span class="name">ダッシュ</span><span class="count"></span><div class="cd"></div>`;
@@ -121,6 +136,12 @@ export class Hud {
         this.onCommand({ type: "giveBuff", buff: give.dataset.give as BuffId, partner: Number(give.dataset.partner) });
         return;
       }
+      const slot = (e.target as HTMLElement).closest<HTMLElement>("[data-slot],[data-secure]");
+      if (slot) {
+        if (slot.dataset.secure !== undefined) this.onCommand({ type: "unsecure", slot: Number(slot.dataset.secure) });
+        else if (this.hasSecure) this.onCommand({ type: "secure", slot: Number(slot.dataset.slot) });
+        return;
+      }
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-take],[data-takeall]");
       if (!el || this.panel.lootId === null) return;
       if (el.dataset.takeall !== undefined) this.onCommand({ type: "takeAll", loot: this.panel.lootId });
@@ -131,8 +152,16 @@ export class Hud {
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-slot]");
       if (el) this.onCommand({ type: "drop", slot: Number(el.dataset.slot) });
     });
+    const pickHint = document.createElement("div");
+    pickHint.className = "pick";
+    pickHint.textContent = `長距離移動：${EVAC.range}m 以内の行き先をクリック　Esc でやめる（アイテムは減らない）`;
+    $("#bigmap").prepend(pickHint);
     $("#bigmap").addEventListener("mousedown", (e) => {
       e.stopPropagation();
+      if (this.pickOpened) {
+        if (e.button === 0 && this.pick?.hover) this.onCommand({ type: "evacTo", to: this.pick.hover });
+        return;
+      }
       this.bigMap = false;
     });
   }
@@ -176,6 +205,8 @@ export class Hud {
     this.areaBannerT = 0;
     this.closePanel();
     this.bigMap = false;
+    this.pickOpened = false;
+    this.pick = null;
   }
 
   get blocksMouse() {
@@ -370,7 +401,7 @@ export class Hud {
         (el.querySelector(".cd") as HTMLElement).style.width = `${full ? 100 : (1 - p.dashCd / (DASH.cooldown * p.dashCdMul)) * 100}%`;
         continue;
       }
-      const n = bagCount(w.bag, el.dataset.item as ItemId);
+      const n = bagCount(w.bag, el.dataset.item as ItemId) + (el.classList.contains("revive") ? w.carriedRevive : 0);
       el.classList.toggle("empty", n <= 0);
       el.classList.toggle("active", !!el.dataset.kind && p.heal?.kind === el.dataset.kind);
       el.querySelector(".count")!.textContent = `${n}`;
@@ -460,6 +491,7 @@ export class Hud {
     $("#feed").innerHTML = this.feed.map((f) => `<div>${f.text}</div>`).join("");
 
     this.mapView.drawMini($<HTMLCanvasElement>("#minimap"), w, this.pings);
+    this.updatePick(w, mouse);
     const big = $("#bigmap");
     big.style.display = this.bigMap ? "flex" : "none";
     if (this.bigMap) {
@@ -469,13 +501,35 @@ export class Hud {
         c.width = W;
         c.height = H;
       }
-      this.mapView.drawFull(c, w, this.pings);
+      this.mapView.drawFull(c, w, this.pings, this.pick);
     }
 
     this.updatePanel(w);
     this.updateTags(w, r);
     this.updateDmgStacks(w, r);
     this.updateAreaBanner(w, dt);
+  }
+
+  /** 長距離移動の行き先を選んでいる間は、全体マップを開いたままにする */
+  private updatePick(w: World, mouse: { x: number; y: number }) {
+    const picking = w.player.alive && w.player.evac?.state === "pick";
+    $("#bigmap").classList.toggle("picking", picking);
+    if (!picking) {
+      if (this.pickOpened) this.bigMap = false;
+      this.pickOpened = false;
+      this.pick = null;
+      return;
+    }
+    if (!this.pickOpened) this.closePanel();
+    this.pickOpened = true;
+    this.bigMap = true;
+    const c = $<HTMLCanvasElement>("#bigmap canvas");
+    const rect = c.getBoundingClientRect();
+    const inside = mouse.x >= rect.left && mouse.x <= rect.right && mouse.y >= rect.top && mouse.y <= rect.bottom;
+    const hover = inside && rect.width > 0
+      ? this.mapView.fullToMap((mouse.x - rect.left) * (c.width / rect.width), (mouse.y - rect.top) * (c.height / rect.height))
+      : null;
+    this.pick = { hover, ok: !!hover && !evacBlocker(w, w.player, hover) };
   }
 
   private updateKitTile(el: HTMLElement, w: World) {
@@ -519,7 +573,7 @@ export class Hud {
     inv.style.display = "flex";
     const near = w.actors.filter((a) => a.team === "partner" && Math.hypot(a.pos.x - w.player.pos.x, a.pos.y - w.player.pos.y) <= GIVE_RANGE);
     const sig = JSON.stringify([
-      w.bag, loot?.items, loot?.id, w.player.weapons.map((x) => x.mag),
+      w.bag, w.secure, loot?.items, loot?.id, w.player.weapons.map((x) => x.mag),
       buffsOf(w.player), w.spareBuffs, near.map((a) => [a.id, buffsOf(a)]),
     ]);
     if (sig === this.panelSig) return;
@@ -539,7 +593,7 @@ export class Hud {
     }
     const slots = w.bag.slots
       .map((s, i) => s
-        ? `<div class="slot" data-slot="${i}" style="--c:${stackColor(s)}" title="${ITEMS[s.item].name}（右クリックで捨てる）"><span class="ic">${itemIcon(s.item, 26)}</span><span class="nm">${ITEMS[s.item].short}</span><span class="ct">${s.count}<small>/${ITEMS[s.item].stack}</small></span></div>`
+        ? `<div class="slot" data-slot="${i}" style="--c:${stackColor(s)}" title="${ITEMS[s.item].name}（${w.secure.slots.length && SECURABLE.includes(ITEMS[s.item].category) ? "クリックで持ち帰れる枠へ・" : ""}右クリックで捨てる）"><span class="ic">${itemIcon(s.item, 26)}</span><span class="nm">${ITEMS[s.item].short}</span><span class="ct">${s.count}<small>/${ITEMS[s.item].stack}</small></span></div>`
         : `<div class="slot empty"></div>`)
       .join("");
     const weapons = p.weapons
@@ -550,9 +604,22 @@ export class Hud {
         <h2>持ち物 <small>${bagUsed(w.bag)}/${w.bag.slots.length}枠　${yen(w.bag.money)}</small></h2>
         <div class="weapons">${weapons}</div>
         <div class="grid">${slots}</div>
+        ${this.secureHtml(w)}
         ${this.buffsHtml(w, near)}
         <p class="hint">クリックで取る・右クリックで捨てる・Tab / Esc で閉じる</p>
       </section>`;
+  }
+
+  /** 死んでも持ち帰れる枠。特殊カバンを持ち込んだときだけ出す */
+  private secureHtml(w: World) {
+    this.hasSecure = w.secure.slots.length > 0;
+    if (!this.hasSecure) return "";
+    const slots = w.secure.slots
+      .map((s, i) => s
+        ? `<div class="slot" data-secure="${i}" style="--c:${stackColor(s)}" title="${ITEMS[s.item].name}（クリックでカバンへ戻す）"><span class="ic">${itemIcon(s.item, 26)}</span><span class="nm">${ITEMS[s.item].short}</span><span class="ct">${s.count}<small>/${ITEMS[s.item].stack}</small></span></div>`
+        : `<div class="slot empty"></div>`)
+      .join("");
+    return `<h3>死んでも持ち帰れる枠 <small>素材と蘇生アイテム。カバンの物をクリックで入れる</small></h3><div class="grid secure">${slots}</div>`;
   }
 
   /** 効いている強化パーツと、予備の受け渡し。予備はパートナーの近くにいるときだけ渡せる */

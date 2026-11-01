@@ -1,4 +1,4 @@
-import { DT, HEALS, ITEMS, HEALTH_MAX, SWAP_TIME, THERMITE, type HealKind } from "./data";
+import { DT, HEALS, ITEMS, HEALTH_MAX, SELF_REVIVE, SWAP_TIME, THERMITE, type HealKind } from "./data";
 import { bagCount, bagRemove } from "./inventory";
 import type { Vec } from "./map";
 import { bottomlessOn, onKill } from "./skills";
@@ -47,7 +47,11 @@ export function swapTo(w: World, a: Actor, idx: number) {
 function healItems(w: World, a: Actor, kind: HealKind): number {
   const def = HEALS[kind];
   let needed: number;
-  if (def.shieldPerItem > 0) {
+  if (def.ultCut) {
+    needed = a.kit && a.kit.ultCd > 0 ? 1 : 0;
+  } else if (def.evac) {
+    needed = a.evac ? 0 : 1;
+  } else if (def.shieldPerItem > 0) {
     needed = Math.ceil((a.shieldMax - a.shield) / def.shieldPerItem);
   } else {
     needed = a.health < HEALTH_MAX ? 1 : 0;
@@ -64,7 +68,8 @@ export function startHeal(w: World, a: Actor, kind: HealKind): boolean {
     if (a.team === "player") {
       const def = HEALS[kind];
       const have = bagCount(w.bag, def.item);
-      w.events.push({ type: "notice", text: have <= 0 ? `${ITEMS[def.item].name}がない` : "回復の必要がない" });
+      const why = def.ultCut ? "アルティメットはもう使える" : def.evac ? "もう使っている" : "回復の必要がない";
+      w.events.push({ type: "notice", text: have <= 0 ? `${ITEMS[def.item].name}がない` : why });
     }
     return false;
   }
@@ -89,6 +94,7 @@ export function tickTimers(w: World, a: Actor) {
   if (a.swapT > 0) a.swapT = Math.max(0, a.swapT - DT);
   if (a.readyT > 0) a.readyT = Math.max(0, a.readyT - DT);
   if (a.burnT > 0) a.burnT = Math.max(0, a.burnT - DT);
+  if (a.invulnT > 0) a.invulnT = Math.max(0, a.invulnT - DT);
   if (a.reloadT > 0) {
     a.reloadT -= DT;
     if (a.reloadT <= 0) {
@@ -107,9 +113,15 @@ export function tickTimers(w: World, a: Actor) {
       const def = HEALS[a.heal.kind];
       a.shield = Math.min(a.shieldMax, a.shield + def.shieldPerItem * a.heal.items);
       a.health = Math.min(HEALTH_MAX, a.health + def.health);
-      if (a.team === "player") bagRemove(w.bag, def.item, a.heal.items);
+      if (def.ultCut && a.kit) a.kit.ultCd = Math.max(0, a.kit.ultCd - def.ultCut);
+      // 長距離移動アイテムは、行き先を決めて飛び立つときに減らす
+      if (a.team === "player" && !def.evac) bagRemove(w.bag, def.item, a.heal.items);
       a.heal = null;
       w.events.push({ type: "healDone", actor: a.id, pos: { ...a.pos } });
+      if (def.evac) {
+        a.evac = { state: "pick" };
+        w.events.push({ type: "evacPick" });
+      }
     }
   }
 }
@@ -161,8 +173,28 @@ export function tickFireCd(a: Actor) {
   a.fireCd -= DT;
 }
 
+/** 蘇生アイテムを使って立ち上がる。カバンで拾った分を、持ち込んだ分より先に使う。使えなければ false */
+function selfRevive(w: World, a: Actor): boolean {
+  if (a.team !== "player") return false;
+  if (bagRemove(w.bag, "revive", 1) <= 0) {
+    if (w.carriedRevive <= 0) return false;
+    w.carriedRevive--;
+    w.usedCarriedRevive = true;
+  }
+  a.health = SELF_REVIVE.health;
+  a.shield = 0;
+  a.overshield = 0;
+  a.invulnT = SELF_REVIVE.invulnerable;
+  a.heal = null;
+  a.reloadT = 0;
+  if (a.evac?.state === "pick") a.evac = null;
+  w.events.push({ type: "selfRevive", actor: a.id, pos: { ...a.pos } });
+  w.events.push({ type: "notice", text: `蘇生アイテムで立ち上がった。${SELF_REVIVE.invulnerable}秒はダメージを受けない` });
+  return true;
+}
+
 export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | undefined, at: Vec) {
-  if (!target.alive) return;
+  if (!target.alive || target.invulnT > 0) return;
   const over = Math.min(target.overshield, dmg);
   target.overshield -= over;
   dmg -= over;
@@ -173,9 +205,15 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
   target.health -= dmg - absorbed;
   w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: over + absorbed > 0, amount });
   startDismount(target);
+  if (target.heal && HEALS[target.heal.kind].stopOnHit) cancelHeal(w, target);
+  if (target.evac?.state === "pick") {
+    target.evac = null;
+    w.events.push({ type: "notice", text: "撃たれたので長距離移動をやめた" });
+  }
   if (hadShield && target.shield <= 0) {
     w.events.push({ type: "shieldBreak", actor: target.id, pos: { ...target.pos } });
   }
+  if (target.health <= 0 && selfRevive(w, target)) return;
   if (target.health <= 0) {
     target.health = 0;
     target.alive = false;

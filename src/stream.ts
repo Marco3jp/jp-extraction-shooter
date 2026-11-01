@@ -68,11 +68,11 @@ export class ChunkStreamer {
     );
   }
 
-  /** 欲しい区画を頼み、届いた区画を近い順に perUpdate 個まで置き、遠い区画を捨てる */
-  update(pos: Vec, vel: Vec) {
+  /** 欲しい区画を頼み、届いた区画を近い順に perUpdate 個まで置き、遠い区画を捨てる。dest は行き先が先に分かる移動の行き先 */
+  update(pos: Vec, vel: Vec, dest: Vec | null = null) {
     const ahead = { x: pos.x + vel.x * this.range.lookahead, y: pos.y + vel.y * this.range.lookahead };
-    const points = [pos, ahead];
-    const near = (i: number, j: number) => Math.min(chunkDist(pos, i, j), chunkDist(ahead, i, j));
+    const points = dest ? [pos, ahead, dest] : [pos, ahead];
+    const near = (i: number, j: number) => Math.min(...points.map((p) => chunkDist(p, i, j)));
     const wanted = this.within(points, this.range.load).sort((a, b) => near(...a) - near(...b));
     for (const [i, j] of wanted) this.request(i, j);
 

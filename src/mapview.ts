@@ -1,10 +1,13 @@
-import { BEACON_RADIUS, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
+import { BEACON_RADIUS, EVAC, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
 import type { GameMap, Vec } from "./sim/map";
 import type { Actor, Extract, World } from "./sim/world";
 import { PARTNER_COLOR, TYPE_COLORS, extractColor } from "./render/renderer";
 import { overviewTile } from "./maploader";
 
 export type Ping = { pos: Vec; t: number };
+
+/** 長距離移動の行き先を選んでいる間に描くもの。hover はカーソルが指している所、ok はそこへ飛べるか */
+export type EvacPick = { hover: Vec | null; ok: boolean };
 
 const PING_LIFE = 3;
 const MINI_METERS = 140;
@@ -20,6 +23,8 @@ function enemyColor(a: Actor): string | null {
 
 export class MapView {
   private tiles: Set<string>;
+  /** 最後に drawFull で描いたときの、マップの座標から canvas の座標への変換 */
+  private full = { offX: 0, offY: 0, scale: 1, bx0: 0, by0: 0 };
 
   constructor(private map: GameMap) {
     this.tiles = new Set(map.index.overview.tiles.map(([i, j]) => `${i}_${j}`));
@@ -75,18 +80,59 @@ export class MapView {
     this.drawMarkers(ctx, w, pings, toS, scale, size, true);
   }
 
+  /** drawFull で描いた canvas の上の点を、マップの座標にする */
+  fullToMap(x: number, y: number): Vec {
+    const f = this.full;
+    return { x: f.bx0 + (x - f.offX) / f.scale, y: f.by0 + (y - f.offY) / f.scale };
+  }
+
   /** 地図全体 */
-  drawFull(canvas: HTMLCanvasElement, w: World, pings: Ping[]) {
+  drawFull(canvas: HTMLCanvasElement, w: World, pings: Ping[], pick: EvacPick | null = null) {
     const ctx = canvas.getContext("2d")!;
     const cw = canvas.width, ch = canvas.height;
     const [bx0, by0, bx1, by1] = this.map.bounds;
     const mw = bx1 - bx0, mh = by1 - by0;
     const scale = Math.min(cw / mw, ch / mh);
     const offX = (cw - mw * scale) / 2, offY = (ch - mh * scale) / 2;
+    this.full = { offX, offY, scale, bx0, by0 };
     ctx.clearRect(0, 0, cw, ch);
     this.drawRect(ctx, bx0, by0, mw, mh, offX, offY, scale);
     const toS = (v: Vec) => ({ x: offX + (v.x - bx0) * scale, y: offY + (v.y - by0) * scale });
     this.drawMarkers(ctx, w, pings, toS, scale, Math.max(cw, ch), false);
+    if (pick) this.drawPick(ctx, w, pick, toS, scale);
+  }
+
+  private drawPick(ctx: CanvasRenderingContext2D, w: World, pick: EvacPick, toS: (v: Vec) => { x: number; y: number }, scale: number) {
+    const pc = toS(w.player.pos);
+    ctx.fillStyle = "rgba(255, 192, 48, 0.08)";
+    ctx.strokeStyle = "rgba(255, 192, 48, 0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(pc.x, pc.y, EVAC.range * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (!pick.hover) return;
+    const h = toS(pick.hover);
+    const color = pick.ok ? "#ffc030" : "#ff5040";
+    ctx.strokeStyle = color;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(pc.x, pc.y);
+    ctx.lineTo(h.x, h.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 7, 0, Math.PI * 2);
+    ctx.moveTo(h.x - 11, h.y);
+    ctx.lineTo(h.x + 11, h.y);
+    ctx.moveTo(h.x, h.y - 11);
+    ctx.lineTo(h.x, h.y + 11);
+    ctx.stroke();
+    const d = Math.round(Math.hypot(pick.hover.x - w.player.pos.x, pick.hover.y - w.player.pos.y));
+    ctx.fillStyle = color;
+    ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`${d}m`, h.x + 13, h.y - 8);
   }
 
   private drawMarkers(
@@ -199,6 +245,19 @@ export class MapView {
       ctx.stroke();
       ctx.fillStyle = color;
       ctx.fillText("脱出", ex.x, ex.y - er - 3);
+    }
+
+    // 長距離移動で飛んでいる間は、降りる所に印を出す
+    if (p.evac?.state === "fly") {
+      const t = toS(p.evac.to);
+      ctx.strokeStyle = "#ffc030";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(t.x - 6, t.y - 6);
+      ctx.lineTo(t.x + 6, t.y + 6);
+      ctx.moveTo(t.x + 6, t.y - 6);
+      ctx.lineTo(t.x - 6, t.y + 6);
+      ctx.stroke();
     }
 
     ctx.save();

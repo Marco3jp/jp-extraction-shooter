@@ -6,6 +6,8 @@ const HEAL_KEYS: Record<string, HealKind> = {
   Digit4: "cellBatch",
   Digit5: "medSmall",
   Digit6: "medLarge",
+  Digit7: "ultCharge",
+  Digit8: "evac",
 };
 
 export class InputState {

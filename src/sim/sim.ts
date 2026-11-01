@@ -7,11 +7,12 @@ import {
 import {
   BEACON_RADIUS, BIKE_ACCEL, DASH, DT, ENEMY_ACTIVE_RANGE, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
-  type BuffId, type HealKind, type ItemId, type ThrowableId,
+  SECURABLE, type BuffId, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
 import { syncSpawns } from "./spawn";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
-import { bagAdd, sortBag } from "./inventory";
+import { bagAdd, sortBag, type Bag } from "./inventory";
+import { cancelEvac, evacStep, flying, launchEvac } from "./evac";
 import { throwGrenade, updateThrowables } from "./throwables";
 import { onBike, padLaunch, startDismount, tickBike, toggleBike } from "./travel";
 import type { Vec } from "./map";
@@ -23,7 +24,13 @@ export type Command =
   | { type: "takeAll"; loot: number }
   | { type: "drop"; slot: number }
   /** 予備の強化パーツをパートナーに渡す */
-  | { type: "giveBuff"; buff: BuffId; partner: number };
+  | { type: "giveBuff"; buff: BuffId; partner: number }
+  /** カバンの山を、死んでも持ち帰れる枠へ移す・枠からカバンへ戻す */
+  | { type: "secure"; slot: number }
+  | { type: "unsecure"; slot: number }
+  /** 長距離移動の行き先を決める・やめる */
+  | { type: "evacTo"; to: Vec }
+  | { type: "evacCancel" };
 
 export type Input = {
   move: Vec;
@@ -157,8 +164,41 @@ function finishTake(w: World, l: Loot, got: Map<ItemId, number>, full: boolean) 
   w.events.push({ type: "lootChanged" });
 }
 
+/** 山を from の slot から to へ移す。全部は入らなければ入った分だけ移す */
+function moveStack(w: World, from: Bag, slot: number, to: Bag) {
+  const s = from.slots[slot];
+  if (!s) return;
+  const n = bagAdd(to, s.item, s.count);
+  if (n <= 0) {
+    w.events.push({ type: "notice", text: "入れる枠がない" });
+    return;
+  }
+  s.count -= n;
+  if (s.count <= 0) from.slots[slot] = null;
+  sortBag(from);
+  w.events.push({ type: "lootChanged" });
+}
+
 function runCommand(w: World, c: Command) {
   const p = w.player;
+  if (c.type === "secure" || c.type === "unsecure") {
+    const s = (c.type === "secure" ? w.bag : w.secure).slots[c.slot];
+    if (c.type === "secure" && s && !SECURABLE.includes(ITEMS[s.item].category)) {
+      w.events.push({ type: "notice", text: `${ITEMS[s.item].name}は入れられない` });
+      return;
+    }
+    if (c.type === "secure") moveStack(w, w.bag, c.slot, w.secure);
+    else moveStack(w, w.secure, c.slot, w.bag);
+    return;
+  }
+  if (c.type === "evacTo") {
+    launchEvac(w, p, c.to);
+    return;
+  }
+  if (c.type === "evacCancel") {
+    cancelEvac(p);
+    return;
+  }
   if (c.type === "drop") {
     const s = w.bag.slots[c.slot];
     if (!s) return;
@@ -209,6 +249,13 @@ function updatePlayer(w: World, input: Input) {
   if (!p.alive) return;
 
   for (const c of input.commands) runCommand(w, c);
+  // 飛んでいる間は何もできない
+  if (flying(p)) {
+    p.sprinting = false;
+    releaseTrigger(p);
+    evacStep(w, p);
+    return;
+  }
 
   if (input.bike) toggleBike(p);
   // 自転車の上では撃てず、回復・ダッシュ・投げ物・スキルも使えない。リロードと持ち替えはできる
@@ -337,10 +384,10 @@ function separate(w: World) {
   const as = w.actors;
   for (let i = 0; i < as.length; i++) {
     const a = as[i];
-    if (!a.alive) continue;
+    if (!a.alive || flying(a)) continue;
     for (let j = i + 1; j < as.length; j++) {
       const b = as[j];
-      if (!b.alive) continue;
+      if (!b.alive || flying(b)) continue;
       const dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
       const r = a.radius + b.radius;
       const d2 = dx * dx + dy * dy;
@@ -473,13 +520,13 @@ export function step(w: World, input: Input) {
   }
 
   for (const a of w.actors) {
-    if (!a.alive) continue;
+    if (!a.alive || flying(a)) continue;
     a.pos.x += a.vel.x * DT;
     a.pos.y += a.vel.y * DT;
     w.map.collide(a.pos, a.radius);
   }
   separate(w);
-  for (const a of w.actors) if (a.alive) w.map.collide(a.pos, a.radius);
+  for (const a of w.actors) if (a.alive && !flying(a)) w.map.collide(a.pos, a.radius);
 
   hearShots(w, byId);
   updateBullets(w, byId);
@@ -497,7 +544,7 @@ export function step(w: World, input: Input) {
       w.events.push({ type: "extractReady", pos: { ...e.pos } });
       w.events.push({ type: "notice", text: "脱出の迎えが来た" });
     }
-    if (p.alive && e.ready && dist(p.pos, e.pos) <= EXTRACT_RADIUS) {
+    if (p.alive && !flying(p) && e.ready && dist(p.pos, e.pos) <= EXTRACT_RADIUS) {
       e.progress += DT;
       if (e.progress >= EXTRACT_TIME) w.outcome = "extracted";
     } else {

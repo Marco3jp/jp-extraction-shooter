@@ -870,3 +870,21 @@ body {
   opacity: 0.3;
   cursor: default;
 }
+
+#bigmap .pick {
+  display: none;
+  padding: 6px 14px;
+  border: 1px solid #ffc030;
+  border-radius: 4px;
+  color: #ffc030;
+  font-weight: 700;
+}
+#bigmap.picking .pick {
+  display: block;
+}
+#bigmap.picking canvas {
+  cursor: crosshair;
+}
+#inventory .grid.secure .slot {
+  outline: 1px dashed #ffc030;
+}

@@ -1,3 +1,4 @@
+import { flying } from "./evac";
 import { angleDiff, findCover, fireEscape, grenadeEscape, scan, seek, turnTo } from "./ai";
 import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
 import {
@@ -165,7 +166,8 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   }
 
   const dP = dist(e.pos, p.pos);
-  if (dP > PARTNER_CATCH_UP.warp && ai.state !== "fight") {
+  // プレイヤーが長距離移動で飛んでいる間は移さず、降りてから後ろへ移す
+  if (dP > PARTNER_CATCH_UP.warp && ai.state !== "fight" && !flying(p)) {
     warpBehind(w, e);
     return;
   }

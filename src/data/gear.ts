@@ -22,6 +22,15 @@ export const SHOES: Record<ShoesId, { name: string; moveMul: number }> = {
   racing: { name: "競技用シューズ", moveMul: 1.12 },
 };
 
+/** 特殊カバン。カバンとは別に、死んでも持ち帰れる枠が付く。名前と数値は仮 */
+export type SecureBagId = "none" | "small" | "medium" | "large";
+export const SECURE_BAGS: Record<SecureBagId, { name: string; slots: number }> = {
+  none: { name: "特殊カバンなし", slots: 0 },
+  small: { name: "特殊カバン（小）", slots: 1 },
+  medium: { name: "特殊カバン（中）", slots: 2 },
+  large: { name: "特殊カバン（大）", slots: 3 },
+};
+
 export type BikeId = "none" | "city" | "road";
 
 /**

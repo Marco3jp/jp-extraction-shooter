@@ -84,6 +84,16 @@ const BODIES: Record<ItemId, string> = {
     `<path d="${gearPath(10, 10, 8, 9.2, 6.8)}" fill="#cbb8ea" stroke="#5c2f9c" stroke-width="0.8" stroke-linejoin="round"/>` +
     `<circle cx="10" cy="10" r="4" fill="#b060ff" stroke="#5c2f9c" stroke-width="0.8"/>` +
     `<circle cx="8.7" cy="8.7" r="1.2" fill="#f2e6ff"/>`,
+  ultCharge:
+    `<circle cx="10" cy="10" r="8.4" fill="#2a2414" stroke="#ffd040" stroke-width="1.4"/>` +
+    `<path d="M11.4 3.6L6.4 11H9.6L8.6 16.4L13.6 9H10.4Z" fill="#ffd040"/>`,
+  revive:
+    `<path d="M10 17.6C5 14 2.2 11.2 2.2 7.6C2.2 5 4.2 3 6.6 3C8 3 9.2 3.7 10 4.8C10.8 3.7 12 3 13.4 3C15.8 3 17.8 5 17.8 7.6C17.8 11.2 15 14 10 17.6Z" fill="#3a1418" stroke="#ffc030" stroke-width="1.3" stroke-linejoin="round"/>` +
+    `<path d="M4.6 9.6H7.4L8.6 7L10.6 12.4L12 9.6H15.4" fill="none" stroke="#ff7060" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`,
+  evac:
+    `<path d="M10 1.6L14.4 8H11.6V13H8.4V8H5.6Z" fill="#ffc030" stroke="#8a6420" stroke-width="0.8" stroke-linejoin="round"/>` +
+    `<path d="M4.2 18.4L7 13.6H13L15.8 18.4Z" fill="#5a5f66" ${OUTLINE}/>` +
+    `<path d="M2.6 18.4H17.4" stroke="#c9cdd2" stroke-width="1.2" stroke-linecap="round"/>`,
   shieldCore: module("#4aa0ff", `<path d="M10 5L14 6.6V9.8C14 12.4 12.3 14.2 10 15.2C7.7 14.2 6 12.4 6 9.8V6.6Z" fill="#4aa0ff"/>`),
   magKit: module(BRASS, `<rect x="6.6" y="5.6" width="2.6" height="8.8" rx="0.6" fill="${BRASS}"/><rect x="10.8" y="5.6" width="2.6" height="8.8" rx="0.6" fill="${BRASS}"/>`),
   stabilizer: module("#c9cdd2", `<circle cx="10" cy="10" r="3.6" fill="none" stroke="#c9cdd2" stroke-width="1.3"/><path d="M10 4.6V7.4M10 12.6V15.4M4.6 10H7.4M12.6 10H15.4" stroke="#c9cdd2" stroke-width="1.3" stroke-linecap="round"/>`),

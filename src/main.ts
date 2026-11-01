@@ -4,15 +4,15 @@ import { Sfx } from "./audio";
 import { Hud } from "./hud";
 import { InputState } from "./input";
 import { Renderer } from "./render/renderer";
-import { DEATH_LOSES_RUN_LOOT, DT, MATERIALS, type MaterialId } from "./sim/data";
-import { bagCount } from "./sim/inventory";
+import { DT, MATERIALS, type MaterialId } from "./sim/data";
+import { bagCount, type Bag } from "./sim/inventory";
 import { GameMap } from "./sim/map";
 import { ChunkLoader, fetchIndex } from "./maploader";
 import { ChunkStreamer } from "./stream";
 import { nearestLoot, step } from "./sim/sim";
 import { LOOT_PANEL_RANGE } from "./sim/data";
 import { createWorld, type World } from "./sim/world";
-import { applyRunResult, campOn, defaultProfile, makeRunLoadout, type Profile } from "./meta/profile";
+import { applyRunResult, campOn, defaultProfile, makeRunLoadout, type Haul, type Profile } from "./meta/profile";
 import { MapView } from "./mapview";
 import { extractAt } from "./sim/sim";
 import { exportProfile, importProfile, loadProfile, saveProfile } from "./meta/save";
@@ -63,6 +63,9 @@ async function main() {
       <tr><td>1 / 2・ホイール</td><td>武器の持ち替え</td></tr>
       <tr><td>3 / 4</td><td>シールド1個（2秒）／まとめて最大4個（5秒）</td></tr>
       <tr><td>5 / 6</td><td>ヘルス小（3.5秒）／ヘルス大（8秒）</td></tr>
+      <tr><td>7</td><td>アルティメット加速（2秒。アルティメットのクールダウンが40秒縮む）</td></tr>
+      <tr><td>8</td><td>長距離移動（3秒。撃たれたら止まる。使い終えたら全体マップで500m以内の行き先をクリックして飛ぶ。飛んでいる間は撃てないが撃たれる）</td></tr>
+      <tr><td>（自動）</td><td>蘇生アイテム：死んだらその場でヘルス50で立ち上がる。拾った分を、持ち込んだ分より先に使う</td></tr>
       <tr><td>X・左クリック</td><td>回復をキャンセル（まとめて回復は何も回復しない）</td></tr>
       <tr><td>C</td><td>自転車に乗る・降りる（持ち込んだときだけ。乗っている間は撃てず、左クリックか撃たれると降りる）</td></tr>
       <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）・脱出地点で迎えを呼ぶ・レールに乗る（固定レールは端から）</td></tr>
@@ -167,14 +170,17 @@ async function main() {
 
   const finishRun = () => {
     const outcome = world.outcome === "extracted" ? "extracted" : "dead";
-    const materials: Partial<Record<MaterialId, number>> = {};
-    for (const m of MATERIALS) {
-      const n = bagCount(world.bag, m);
-      if (n > 0) materials[m] = n;
-    }
-    const collected = { money: world.bag.money, materials };
-    const gained = applyRunResult(profile, { outcome, kills: world.kills, ...collected });
-    const lost = outcome === "dead" && DEATH_LOSES_RUN_LOOT ? collected : { money: 0, materials: {} };
+    const haul = (bag: Bag): Haul => {
+      const materials: Partial<Record<MaterialId, number>> = {};
+      for (const m of MATERIALS) {
+        const n = bagCount(bag, m);
+        if (n > 0) materials[m] = n;
+      }
+      return { money: bag.money, materials, revive: bagCount(bag, "revive") };
+    };
+    const { gained, lost } = applyRunResult(profile, {
+      outcome, kills: world.kills, bag: haul(world.bag), secure: haul(world.secure), usedCarriedRevive: world.usedCarriedRevive,
+    });
     const ex = outcome === "extracted" ? extractAt(world, world.player.pos) : null;
     lastResult = { outcome, time: world.time, kills: world.kills, gained, lost, extractAt: ex ? { ...ex.pos } : null };
     persist();
@@ -182,6 +188,10 @@ async function main() {
   };
 
   input.onEscape = () => {
+    if (mode === "playing" && world.player.evac?.state === "pick") {
+      input.command({ type: "evacCancel" });
+      return;
+    }
     if (mode === "playing" && (hud.panel.open || hud.bigMap)) {
       hud.closePanel();
       hud.bigMap = false;
@@ -260,7 +270,9 @@ async function main() {
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
     if (mode === "playing") {
-      streamer.update(world.player.pos, world.player.vel);
+      // 長距離移動で飛んでいる間は、行き先の周りも読む
+      const ev = world.player.evac;
+      streamer.update(world.player.pos, world.player.vel, ev?.state === "fly" ? ev.to : null);
       acc += dt;
       let steps = 0;
       while (acc >= DT && steps < 5) {

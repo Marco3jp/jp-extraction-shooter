@@ -1,5 +1,4 @@
-import type { MaterialId } from "../../data/items";
-import type { Profile } from "../../meta/profile";
+import type { Haul, Profile } from "../../meta/profile";
 import type { MapView } from "../../mapview";
 import type { GameMap, Vec } from "../../sim/map";
 
@@ -9,9 +8,9 @@ export type LastRunSummary = {
   time: number;
   kills: number;
   /** 実際に保管庫に入った分。死んで失ったときは空 */
-  gained: { money: number; materials: Partial<Record<MaterialId, number>> };
+  gained: Haul;
   /** 死んで失った分 */
-  lost: { money: number; materials: Partial<Record<MaterialId, number>> };
+  lost: Haul;
   /** 脱出した地点。死んだときは null */
   extractAt: Vec | null;
 };

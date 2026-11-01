@@ -41,6 +41,9 @@ export const ENEMY_MIN_TTK = 1.5;
 /** 理論 TTK を測るときの相手の体力（敵のシールド100＋ヘルス100） */
 export const TTK_TARGET_HP = 200;
 
+/** 蘇生アイテムで立ち上がったときのヘルスと、ダメージを受けない秒数（仮） */
+export const SELF_REVIVE = { health: 50, invulnerable: 2 };
+
 /** 死んだとき、そのランで拾った素材とお金を失うか。持ち込んだ装備は失わない（仮） */
 export const DEATH_LOSES_RUN_LOOT = true;
 

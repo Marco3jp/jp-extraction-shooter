@@ -1,3 +1,4 @@
+import { evacHeight } from "../sim/evac";
 import * as THREE from "three";
 import {
   BEACON_RADIUS, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
@@ -329,6 +330,9 @@ export class Renderer {
       material: instanced(new THREE.OctahedronGeometry(0.3).translate(0, 0.32, 0), glow, 600),
       money: instanced(new THREE.BoxGeometry(0.55, 0.12, 0.32).translate(0, 0.06, 0), glow, 600),
       buff: instanced(new THREE.CylinderGeometry(0.3, 0.3, 0.16, 6).translate(0, 0.3, 0), glow, 100),
+      ult: instanced(new THREE.TetrahedronGeometry(0.32).translate(0, 0.32, 0), glow, 100),
+      revive: instanced(new THREE.TorusGeometry(0.24, 0.08, 8, 16).rotateX(-Math.PI / 2).translate(0, 0.3, 0), glow, 20),
+      travel: instanced(new THREE.ConeGeometry(0.24, 0.6, 8).translate(0, 0.3, 0), glow, 20),
     };
     this.scene.add(this.bins, this.deathboxes, ...Object.values(this.groundItems));
     this.lootHighlight = new THREE.Mesh(
@@ -860,7 +864,7 @@ export class Renderer {
     this.lootVersion = w.lootVersion;
     this.lootAt = { x: px, y: py };
     const col = new THREE.Color();
-    const counts = { bins: 0, deathboxes: 0, ammo: 0, heal: 0, throwable: 0, material: 0, money: 0, buff: 0, glows: 0 };
+    const counts = { bins: 0, deathboxes: 0, ammo: 0, heal: 0, throwable: 0, material: 0, money: 0, buff: 0, ult: 0, revive: 0, travel: 0, glows: 0 };
     let markers = 0;
     const put = (mesh: THREE.InstancedMesh, i: number, m: THREE.Matrix4, c: number) => {
       mesh.setMatrixAt(i, m);
@@ -1018,7 +1022,7 @@ export class Renderer {
       v.group.visible = true;
       const ax = a.prev.x + (a.pos.x - a.prev.x) * alpha;
       const ay = a.prev.y + (a.pos.y - a.prev.y) * alpha;
-      v.group.position.set(ax, 0, ay);
+      v.group.position.set(ax, evacHeight(a), ay);
       v.body.rotation.y = -a.facing;
       v.body.visible = isPlayer || a.seen;
       v.body.rotation.z = a.alive ? 0 : Math.PI / 2;
@@ -1046,7 +1050,7 @@ export class Renderer {
       v.healRing.visible = a.alive && !!a.heal && stateVisible;
       if (a.heal) {
         const def = HEALS[a.heal.kind];
-        v.healMat.color.setHex(def.shieldPerItem > 0 ? 0x4aa0ff : 0x50e070);
+        v.healMat.color.setHex(def.ultCut ? 0xffd040 : def.evac ? 0xffc030 : def.shieldPerItem > 0 ? 0x4aa0ff : 0x50e070);
         const k = 1 - a.heal.t / a.heal.total;
         v.healRing.scale.setScalar(1.6 - k * 0.8);
         v.healRing.position.y = 0.1 + k * 1.8;

@@ -7,20 +7,22 @@ import { format } from "node:util";
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
 import {
-  BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, FIXED_RAIL, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
+  BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, EVAC, FIXED_RAIL, HEALS, SELF_REVIVE, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
 } from "../src/sim/data";
 import { buffsOf } from "../src/sim/buffs";
 import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
-import { bagCount, bagUsed } from "../src/sim/inventory";
+import { bagAdd, bagCount, bagUsed } from "../src/sim/inventory";
 import { CHUNK, GameMap, decodeChunk, type ChunkJson, type LoadedChunk, type MapIndex } from "../src/sim/map";
 import { ChunkStreamer, STREAM_RANGE, type StreamRange } from "../src/stream";
 import { Rng } from "../src/sim/rng";
 import { syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
-import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutBike, setLoadoutWeapon, type Profile } from "../src/meta/profile";
+import {
+  applyRunResult, craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutBike, setLoadoutRevive, setLoadoutSecureBag, setLoadoutWeapon, type Profile,
+} from "../src/meta/profile";
 import { RECIPES } from "../src/data/recipes";
 import type { WeaponType } from "../src/data/weapons";
 
@@ -1269,6 +1271,121 @@ section("区画を読み直す", () => {
       + `読み直した敵 ${after.enemies.length}/${before.enemies.length}人（倒した1人を除いて同じ ${same(after.enemies.filter((x) => expectEnemies.some((y) => y.split(":")[0] === x.split(":")[0])), expectEnemies)}）、`
       + `箱 ${bin ? `中身 ${binAfter?.items.length}/${BIN_ITEMS} 開いている ${binAfter?.opened}` : "なし"}、拾った物 ${ground ? (w.loot.some((l) => l.spawn?.chunk === key && l.spawn.n === ground.spawn!.n) ? "戻った" : "戻らない") : "なし"}`,
   );
+});
+
+section("ラン中に使うアイテム", () => {
+  const ids = ["ultCharge", "revive", "evac"] as const;
+  const seeds = [1, 2, 3, 4, 5, 6];
+  const found = new Map<string, number>(ids.map((id) => [id, 0]));
+  for (const seed of seeds) {
+    const w = createWorld(map, seed, baseLoadout);
+    for (const l of w.loot) for (const s of l.items) if (found.has(s.item)) found.set(s.item, found.get(s.item)! + s.count);
+  }
+  console.log(`ラン中に使うアイテム: 出撃時に読む ${STREAM_RANGE.load}m の内に平均`, Object.fromEntries(ids.map((id) => [ITEMS[id].name, (found.get(id)! / seeds.length).toFixed(2)])));
+
+  const quietWorld = (prof = defaultProfile()) => {
+    const w = createWorld(map, 9, makeRunLoadout(prof));
+    for (const a of w.actors) if (a.team === "enemy") a.alive = false;
+    w.loot = [];
+    return w;
+  };
+  const wait = (w: World, sec: number, input: Partial<Input> = {}) => {
+    for (let i = 0; i < Math.round(sec / DT); i++) step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 1, y: w.player.pos.y }, ...input });
+  };
+
+  {
+    const w = quietWorld();
+    const p = w.player;
+    p.kit!.ultCd = 100;
+    bagAdd(w.bag, "ultCharge", 2);
+    step(w, { ...emptyInput(), heal: "ultCharge" });
+    wait(w, HEALS.ultCharge.time + 0.1);
+    const after = p.kit!.ultCd;
+    p.kit!.ultCd = 0;
+    step(w, { ...emptyInput(), heal: "ultCharge" });
+    console.log(`アルティメット加速: クールダウン 100 → ${after.toFixed(1)}秒（決めた値 −${HEALS.ultCharge.ultCut}）、残り ${bagCount(w.bag, "ultCharge")}個、溜まっているときに使おうとすると始まらない ${p.heal === null}`);
+  }
+
+  {
+    const prof = defaultProfile();
+    prof.items.revive = 1;
+    setLoadoutRevive(prof, true);
+    const w = quietWorld(prof);
+    const p = w.player;
+    bagAdd(w.bag, "revive", 1);
+    const kill = () => applyDamage(w, p, 1000, undefined, p.pos);
+    kill();
+    const first = `${p.alive} ヘルス ${p.health} 残り カバン ${bagCount(w.bag, "revive")}・持ち込み ${w.carriedRevive}`;
+    wait(w, 1);
+    kill();
+    const invuln = p.alive && p.health === SELF_REVIVE.health;
+    wait(w, SELF_REVIVE.invulnerable);
+    kill();
+    const second = `${p.alive} 持ち込みを使った ${w.usedCarriedRevive}`;
+    wait(w, SELF_REVIVE.invulnerable + 0.1);
+    kill();
+    console.log(`蘇生アイテム: 1回目 立ち上がった ${first}、${SELF_REVIVE.invulnerable}秒以内はダメージを受けない ${invuln}、2回目 立ち上がった ${second}、3回目 結果=${w.outcome}`);
+  }
+
+  {
+    const prof = defaultProfile();
+    prof.secureBags.push("medium");
+    setLoadoutSecureBag(prof, "medium");
+    const w = quietWorld(prof);
+    bagAdd(w.bag, "circuit", 3);
+    bagAdd(w.bag, "revive", 1);
+    bagAdd(w.bag, "junk", 7);
+    w.bag.money = 900;
+    const slotOf = (item: string) => w.bag.slots.findIndex((x) => x?.item === item);
+    const order: string[] = [];
+    for (const item of ["rifle", "circuit", "revive", "junk"]) {
+      step(w, { ...emptyInput(), commands: [{ type: "secure", slot: slotOf(item) }] });
+      order.push(`${ITEMS[item as keyof typeof ITEMS].name}→${w.secure.slots.some((x) => x?.item === item) ? "入った" : "入らない"}`);
+    }
+    applyDamage(w, w.player, 1000, undefined, w.player.pos);
+    const haul = (b: typeof w.bag) => ({ money: b.money, materials: { junk: bagCount(b, "junk"), circuit: bagCount(b, "circuit") }, revive: bagCount(b, "revive") });
+    const before = { money: prof.money, circuit: prof.materials.circuit, junk: prof.materials.junk, revive: prof.items.revive };
+    const r = applyRunResult(prof, { outcome: "dead", kills: 0, bag: haul(w.bag), secure: haul(w.secure), usedCarriedRevive: false });
+    console.log(
+      `特殊カバン（中・2枠）: ${order.join("・")}。死んで 保管庫 お金 +${prof.money - before.money}・電子部品 +${prof.materials.circuit - before.circuit}・金属くず +${prof.materials.junk - before.junk}・蘇生 +${prof.items.revive - before.revive}、失った お金 ${r.lost.money}・金属くず ${r.lost.materials.junk ?? 0}`,
+    );
+  }
+
+  {
+    const w = quietWorld();
+    const p = w.player;
+    bagAdd(w.bag, "evac", 1);
+    step(w, { ...emptyInput(), heal: "evac" });
+    wait(w, 1);
+    applyDamage(w, p, 1, undefined, p.pos);
+    const stopped = p.heal === null;
+    step(w, { ...emptyInput(), heal: "evac" });
+    wait(w, HEALS.evac.time + 0.1);
+    const picking = p.evac?.state === "pick";
+    const far = w.extracts.find((e) => Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) > EVAC.range + 50);
+    if (far) step(w, { ...emptyInput(), commands: [{ type: "evacTo", to: far.pos }] });
+    const refused = p.evac?.state === "pick" && bagCount(w.bag, "evac") === 1;
+    const goal = w.extracts
+      .filter((e) => Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) <= EVAC.range)
+      .sort((a, b) => Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y) - Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y))[0];
+    const from = { ...p.pos };
+    step(w, { ...emptyInput(), commands: [{ type: "evacTo", to: goal.pos }] });
+    const t0 = w.time;
+    let shot = 0, hits = 0;
+    while (p.evac && w.time - t0 < 60) {
+      step(w, { ...emptyInput(), fire: true, aim: { x: p.pos.x + 1, y: p.pos.y } });
+      shot += w.events.filter((e) => e.type === "shot" && e.actor === p.id).length;
+      if (w.time - t0 > 4 && !hits) {
+        applyDamage(w, p, 10, undefined, p.pos);
+        hits++;
+      }
+    }
+    const d = Math.hypot(goal.pos.x - from.x, goal.pos.y - from.y);
+    console.log(
+      `長距離移動: 使っている間に撃たれると止まる ${stopped}、使い終えたら行き先を選ぶ ${picking}、${EVAC.range}m より遠い所は選べない ${refused}、`
+      + `${d.toFixed(0)}m を ${(w.time - t0).toFixed(1)}秒で飛んだ（降りた所のずれ ${Math.hypot(p.pos.x - goal.pos.x, p.pos.y - goal.pos.y).toFixed(2)}m）、飛んでいる間に撃った ${shot}発・撃たれたシールド ${p.shield}/${p.shieldMax}、残り ${bagCount(w.bag, "evac")}個`,
+    );
+  }
 });
 
 type Done = { k: number; out: string; error?: string; ms: number };

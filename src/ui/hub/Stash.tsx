@@ -1,5 +1,5 @@
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOTS } from "../../data/attachments";
-import { ARMORS, BAGS, BIKES, SHOES } from "../../data/gear";
+import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { WEAPON_BASES } from "../../data/weapons";
 import { attachmentsInUse, weaponAttachments, type Profile } from "../../meta/profile";
@@ -30,6 +30,13 @@ export function Stash({ profile }: { profile: Profile }) {
               <span>{profile.materials[m] ?? 0}</span>
             </li>
           ))}
+          <li>
+            <span class="hub-amount">
+              <Icon id="revive" />
+              <span style={{ color: rarityColor(ITEMS.revive.rarity) }}>{ITEMS.revive.name}</span>
+            </span>
+            <span>{profile.items.revive}</span>
+          </li>
         </ul>
       </section>
 
@@ -95,6 +102,12 @@ export function Stash({ profile }: { profile: Profile }) {
             <li>
               <span>{SHOES[s].name}</span>
               <span class="muted">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
+            </li>
+          ))}
+          {profile.secureBags.filter((b) => b !== "none").map((b) => (
+            <li>
+              <span>{SECURE_BAGS[b].name}</span>
+              <span class="muted">死んでも持ち帰れる枠 {SECURE_BAGS[b].slots}</span>
             </li>
           ))}
           {profile.bikes.filter((b) => b !== "none").map((b) => (

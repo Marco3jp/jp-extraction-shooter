@@ -4,10 +4,12 @@ export type AmmoId = "rifle" | "smg" | "long" | "shell" | "light";
 export type HealItemId = "cell" | "medSmall" | "medLarge";
 export type ThrowableId = "frag" | "thermite";
 export type MaterialId = "junk" | "circuit" | "precision";
-export type ItemId = AmmoId | HealItemId | ThrowableId | MaterialId | BuffId | "money";
+/** アルティメット加速・蘇生アイテム・長距離移動アイテム */
+export type SpecialItemId = "ultCharge" | "revive" | "evac";
+export type ItemId = AmmoId | HealItemId | ThrowableId | SpecialItemId | MaterialId | BuffId | "money";
 export type Rarity = "common" | "rare" | "epic" | "legendary";
 /** buff はカバンに入らず、拾った時点で効く */
-export type ItemCategory = "ammo" | "heal" | "throwable" | "material" | "buff" | "money";
+export type ItemCategory = "ammo" | "heal" | "throwable" | "ult" | "revive" | "travel" | "material" | "buff" | "money";
 
 export type ItemDef = {
   name: string;
@@ -30,6 +32,9 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   medLarge: { name: "ヘルス大", short: "ヘルス大", stack: 2, rarity: "rare", category: "heal" },
   frag: { name: "グレネード", short: "グレ", stack: 3, rarity: "rare", category: "throwable" },
   thermite: { name: "テルミット", short: "テルミット", stack: 3, rarity: "rare", category: "throwable" },
+  ultCharge: { name: "アルティメット加速", short: "ULT加速", stack: 2, rarity: "rare", category: "ult" },
+  revive: { name: "蘇生アイテム", short: "蘇生", stack: 1, rarity: "legendary", category: "revive" },
+  evac: { name: "長距離移動アイテム", short: "移動", stack: 1, rarity: "legendary", category: "travel" },
   junk: { name: "金属くず", short: "金属くず", stack: 10, rarity: "common", category: "material" },
   circuit: { name: "電子部品", short: "電子部品", stack: 6, rarity: "rare", category: "material" },
   precision: { name: "精密部品", short: "精密部品", stack: 3, rarity: "epic", category: "material" },
@@ -41,6 +46,8 @@ export const ITEMS: Record<ItemId, ItemDef> = {
 
 export const ITEM_ORDER = Object.keys(ITEMS) as ItemId[];
 export const MATERIALS: MaterialId[] = ["junk", "circuit", "precision"];
+/** 死んでも持ち帰れる枠に入れられる物 */
+export const SECURABLE: ItemCategory[] = ["material", "revive"];
 
 export const RARITY_COLORS: Record<Rarity, number> = {
   common: 0xe8e8e8,
@@ -64,6 +71,9 @@ export const LOOT_TABLE: { item: ItemId; min: number; max: number; weight: numbe
   { item: "medLarge", min: 1, max: 1, weight: 3 },
   { item: "frag", min: 1, max: 2, weight: 5 },
   { item: "thermite", min: 1, max: 2, weight: 4 },
+  { item: "ultCharge", min: 1, max: 1, weight: 0.4 },
+  { item: "revive", min: 1, max: 1, weight: 0.08 },
+  { item: "evac", min: 1, max: 1, weight: 0.08 },
   { item: "junk", min: 2, max: 5, weight: 14 },
   { item: "circuit", min: 1, max: 2, weight: 6 },
   { item: "precision", min: 1, max: 1, weight: 1.5 },

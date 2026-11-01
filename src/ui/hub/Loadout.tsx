@@ -1,7 +1,8 @@
 import { useState } from "preact/hooks";
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
 import { PLAYER_MIN_TTK } from "../../data/constants";
-import { ARMORS, BAGS, BIKES, SHOES } from "../../data/gear";
+import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES } from "../../data/gear";
+import { ITEMS } from "../../data/items";
 import {
   PASSIVE_IDS, PASSIVES, SKILL_IDS, SKILLS, ULT_IDS, ULTS, type PassiveId, type SkillId, type UltId,
 } from "../../data/skills";
@@ -14,7 +15,7 @@ import {
   profileWeapon,
   setAttachment,
   setLoadoutArmor,
-  setLoadoutBag, setLoadoutBike, setLoadoutPassive, setLoadoutShoes,
+  setLoadoutBag, setLoadoutBike, setLoadoutPassive, setLoadoutRevive, setLoadoutSecureBag, setLoadoutShoes,
   setLoadoutSkill, setLoadoutUlt,
   setLoadoutWeapon,
   setPartnerEnabled,
@@ -117,6 +118,33 @@ export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
                 <span class="hub-chip-sub">{formatBike(BIKES[b].speed, BIKES[b].mount) ?? "持ち込まない"}</span>
               </button>
             ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">特殊カバン</div>
+          <div class="hub-chips">
+            {profile.secureBags.map((b) => (
+              <button
+                class={`hub-chip${profile.loadout.secureBag === b ? " selected" : ""}`}
+                onClick={() => update((p) => setLoadoutSecureBag(p, b))}
+              >
+                <span>{SECURE_BAGS[b].name}</span>
+                <span class="hub-chip-sub">{SECURE_BAGS[b].slots > 0 ? `死んでも持ち帰れる枠 ${SECURE_BAGS[b].slots}` : "持ち込まない"}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">{ITEMS.revive.name}</div>
+          <div class="hub-chips">
+            <button
+              class={`hub-chip${profile.loadout.revive ? " selected" : ""}`}
+              disabled={profile.items.revive <= 0}
+              onClick={() => update((p) => setLoadoutRevive(p, !p.loadout.revive))}
+            >
+              <span>{profile.loadout.revive ? "1個持ち込む" : "持ち込まない"}</span>
+              <span class="hub-chip-sub">保管庫に {profile.items.revive}個。死んだら自動で使い、その場で立ち上がる</span>
+            </button>
           </div>
         </div>
         <div class="hub-field">

@@ -132,6 +132,10 @@ export type Actor = {
   bike: Bike | null;
   /** テルミットの炎で足が遅くなっている残り時間 */
   burnT: number;
+  /** 蘇生アイテムで立ち上がった後、ダメージを受けない残り時間 */
+  invulnT: number;
+  /** 長距離移動アイテム。pick は全体マップで行き先を選んでいる間、fly は飛んでいる間 */
+  evac: Evac | null;
   heal: Heal | null;
   alive: boolean;
   /** 情報の見え方の段階（敵のみ）。0:なし 1:影 2:影＋型 3:影＋型＋体力 */
@@ -192,6 +196,11 @@ export type Rail = { id: number; owner: number | null; chunk: string | null; a: 
 /** ダッシュパッド。angle は軸の向き */
 export type Pad = { id: number; chunk: string; pos: Vec; angle: number };
 
+export type Evac =
+  | { state: "pick" }
+  /** t は飛び立ってからの秒数、total は降りるまでの秒数 */
+  | { state: "fly"; from: Vec; to: Vec; t: number; total: number };
+
 export type Bike = { speed: number; mount: number; state: "off" | "mounting" | "on" | "dismounting"; t: number };
 
 /** 巻き検知の円。next の時刻に置き直す */
@@ -235,7 +244,11 @@ export type GameEvent =
   | { type: "skill"; actor: number; pos: Vec; id: SkillId | UltId }
   | { type: "barrierBreak"; pos: Vec }
   | { type: "killShield"; actor: number; amount: number }
-  | { type: "revive"; actor: number; pos: Vec };
+  | { type: "revive"; actor: number; pos: Vec }
+  | { type: "selfRevive"; actor: number; pos: Vec }
+  | { type: "evacPick" }
+  | { type: "evacLaunch"; actor: number; pos: Vec; to: Vec }
+  | { type: "evacLand"; actor: number; pos: Vec };
 
 export type Outcome = "playing" | "dead" | "extracted";
 
@@ -267,6 +280,11 @@ export type World = {
   /** 箱や落ちている物が変わるたびに増える（描画の作り直し用） */
   lootVersion: number;
   bag: Bag;
+  /** 死んでも持ち帰れる枠。特殊カバンを持ち込まなければ枠は 0 */
+  secure: Bag;
+  /** 持ち込んだ蘇生アイテムの残り（0 か 1）と、使ったか */
+  carriedRevive: number;
+  usedCarriedRevive: boolean;
   extracts: Extract[];
   events: GameEvent[];
   outcome: Outcome;
@@ -306,7 +324,7 @@ export function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], 
     dashCharges: 1, dashMax: 1, dashCd: 0,
     ride: null,
     bike: null,
-    burnT: 0,
+    burnT: 0, invulnT: 0, evac: null,
     heal: null, alive: true,
     info: 0, seen: false, revealUntil: 0,
     carry: [],
@@ -450,6 +468,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     time: 0, tick: 0,
     actors, player,
     bullets: [], grenades: [], fires: [], barriers: [], rails: [], pads: [], healMarks: [], loot: [], lootVersion: 1, bag,
+    secure: makeBag(loadout.secureSlots), carriedRevive: loadout.revive, usedCarriedRevive: false,
     extracts,
     events: [],
     outcome: "playing",

@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { ITEMS, MATERIALS, type MaterialId } from "../../data/items";
+import { ITEMS, MATERIALS } from "../../data/items";
 import { CampPicker } from "./CampPicker";
 import { Craft } from "./Craft";
 import { formatMoney, formatTime } from "./format";
@@ -8,6 +8,7 @@ import { Amounts, Icon } from "./parts";
 import { SaveTab } from "./SaveTab";
 import { Stash } from "./Stash";
 import type { HubProps, LastRunSummary } from "./types";
+import type { Haul } from "../../meta/profile";
 
 type Tab = "loadout" | "craft" | "stash" | "save";
 
@@ -65,8 +66,7 @@ export function Hub(props: HubProps) {
   );
 }
 
-const hasAny = (a: { money: number; materials: Partial<Record<MaterialId, number>> }) =>
-  a.money > 0 || MATERIALS.some((m) => (a.materials[m] ?? 0) > 0);
+const hasAny = (a: Haul) => a.money > 0 || a.revive > 0 || MATERIALS.some((m) => (a.materials[m] ?? 0) > 0);
 
 function ResultBanner({ result, onDismiss }: { result: LastRunSummary; onDismiss: () => void }) {
   const ok = result.outcome === "extracted";

@@ -1,5 +1,5 @@
 import { ATTACHMENTS, SLOTS } from "../../data/attachments";
-import { ARMORS, BAGS, BIKES, SHOES } from "../../data/gear";
+import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES } from "../../data/gear";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { RECIPES, type Recipe, type RecipeCategory } from "../../data/recipes";
 import { WEAPON_BASES } from "../../data/weapons";
@@ -12,7 +12,7 @@ const CATEGORIES: { id: RecipeCategory; name: string }[] = [
   { id: "material", name: "素材" },
   { id: "attachment", name: "アタッチメント" },
   { id: "weapon", name: "武器" },
-  { id: "gear", name: "防具・カバン・靴" },
+  { id: "gear", name: "防具・カバン・靴・自転車" },
   { id: "partner", name: "パートナー" },
 ];
 
@@ -100,6 +100,8 @@ function Output({ recipe }: { recipe: Recipe }) {
       return <span class="hub-recipe-name">{SHOES[o.id].name}</span>;
     case "bike":
       return <span class="hub-recipe-name">{BIKES[o.id].name}</span>;
+    case "secureBag":
+      return <span class="hub-recipe-name">{SECURE_BAGS[o.id].name}</span>;
     case "partner":
       return (
         <span class="hub-recipe-name">
@@ -133,6 +135,8 @@ function Detail({ recipe }: { recipe: Recipe }) {
       return <p class="hub-recipe-text">{formatMoveMul(SHOES[o.id].moveMul)}</p>;
     case "bike":
       return <p class="hub-recipe-text">{formatBike(BIKES[o.id].speed, BIKES[o.id].mount)}。乗っている間は撃てない。撃たれると降りる</p>;
+    case "secureBag":
+      return <p class="hub-recipe-text">死んでも持ち帰れる枠 {SECURE_BAGS[o.id].slots}。素材と蘇生アイテムを入れられる</p>;
     case "partner":
       return (
         <p class="hub-recipe-text">
