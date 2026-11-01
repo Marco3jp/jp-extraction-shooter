@@ -151,9 +151,20 @@ export type GameEvent =
   | { type: "throw"; actor: number; pos: Vec; kind: ThrowableId }
   | { type: "explosion"; pos: Vec; radius: number }
   | { type: "fireStart"; a: Vec; b: Vec }
-  | { type: "dash"; actor: number; pos: Vec; dir: Vec };
+  | { type: "dash"; actor: number; pos: Vec; dir: Vec }
+  | { type: "extractCall"; pos: Vec }
+  | { type: "extractReady"; pos: Vec };
 
 export type Outcome = "playing" | "dead" | "extracted";
+
+/** 脱出地点。E で呼ぶと readyAt に迎えが来て、それから中に EXTRACT_TIME いれば脱出できる */
+export type Extract = {
+  pos: Vec;
+  /** 迎えが来る時刻。呼んでいなければ null */
+  readyAt: number | null;
+  ready: boolean;
+  progress: number;
+};
 
 export type World = {
   map: GameMap;
@@ -170,7 +181,7 @@ export type World = {
   /** 箱や落ちている物が変わるたびに増える（描画の作り直し用） */
   lootVersion: number;
   bag: Bag;
-  extract: { pos: Vec; progress: number };
+  extracts: Extract[];
   events: GameEvent[];
   outcome: Outcome;
   kills: number;
@@ -236,19 +247,20 @@ function pickWeighted(rng: Rng, weights: number[]): number {
   return weights.length - 1;
 }
 
-export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): World {
+/** start を渡すと、その近くの空いている場所から始める（キャンプ）。渡さなければマップの出発地点から */
+export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, start?: Vec): World {
   const rng = new Rng(seed);
   const W = map.w;
 
-  const nearestFree = (fx: number, fy: number, mask?: Uint8Array): Vec => {
-    const tx = Math.floor(fx * map.w), ty = Math.floor(fy * map.h);
+  const nearestFree = (px: number, py: number, mask: Uint8Array): Vec => {
+    const tx = Math.floor(px), ty = Math.floor(py);
     for (let r = 0; r < 300; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           const x = tx + dx, y = ty + dy;
           if (map.blocked(x, y)) continue;
-          if (mask && !mask[x + y * W]) continue;
+          if (!mask[x + y * W]) continue;
           if (map.blocked(x + 1, y) || map.blocked(x - 1, y) || map.blocked(x, y + 1) || map.blocked(x, y - 1)) continue;
           return { x: x + 0.5, y: y + 0.5 };
         }
@@ -258,11 +270,14 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
   };
 
   const layout = map.json.layout;
-  const start = nearestFree(...layout.start);
-  map.setReach(start);
+  map.setReachMain();
   const reach = map.reach!;
-  const [efx, efy] = rng.pick(layout.extracts);
-  const extractPos = nearestFree(efx, efy, reach);
+  const startPos = start
+    ? nearestFree(start.x, start.y, reach)
+    : nearestFree(layout.start[0] * map.w, layout.start[1] * map.h, reach);
+  const extracts: Extract[] = layout.extracts.map(([fx, fy]) => ({
+    pos: nearestFree(fx * map.w, fy * map.h, reach), readyAt: null, ready: false, progress: 0,
+  }));
 
   const freeCells: number[] = [];
   const wallSideCells: number[] = [];
@@ -279,7 +294,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
   const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
   let nextId = 1;
-  const player = makeActor(nextId++, "player", "player", PLAYER_FACTION, start, loadout.weapons, loadout.shieldMax);
+  const player = makeActor(nextId++, "player", "player", PLAYER_FACTION, startPos, loadout.weapons, loadout.shieldMax);
   player.moveMul = loadout.moveMul;
   player.facing = -Math.PI / 2;
   const preferAmmo = loadout.weapons.map((w) => w.ammo);
@@ -318,7 +333,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
     for (let d = minFromAnchors; d >= 10; d -= 10) {
       for (let tries = 0; tries < 300; tries++) {
         const p = cellPos(rng.pick(inArea));
-        if (dist(p, start) < minFromStart) continue;
+        if (dist(p, startPos) < minFromStart) continue;
         if (anchors.some((o) => dist(p, o) < d)) continue;
         return p;
       }
@@ -372,7 +387,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
     for (let tries = 0; tries < 200; tries++) {
       const i = rng.pick(wallSideCells);
       const p = cellPos(i);
-      if (dist(p, start) < 10 || loot.some((l) => l.kind === "bin" && dist(l.pos, p) < 28)) continue;
+      if (dist(p, startPos) < 10 || loot.some((l) => l.kind === "bin" && dist(l.pos, p) < 28)) continue;
       center = i;
       break;
     }
@@ -398,7 +413,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
       const p = cellPos(rng.pick(freeCells));
       p.x += rng.range(-0.3, 0.3);
       p.y += rng.range(-0.3, 0.3);
-      if (dist(p, start) < 6 || lootAt(p, 4)) continue;
+      if (dist(p, startPos) < 6 || lootAt(p, 4)) continue;
       loot.push({ id: nextId++, pos: p, kind: "ground", items: [rollStack(rng, preferAmmo)], opened: true, angle: rng.range(0, Math.PI) });
       break;
     }
@@ -412,7 +427,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
     time: 0, tick: 0,
     actors, player,
     bullets: [], grenades: [], fires: [], loot, lootVersion: 1, bag,
-    extract: { pos: extractPos, progress: 0 },
+    extracts,
     events: [],
     outcome: "playing",
     kills: 0,

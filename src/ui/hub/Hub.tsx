@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import { ITEMS, MATERIALS, type MaterialId } from "../../data/items";
+import { CampPicker } from "./CampPicker";
 import { Craft } from "./Craft";
 import { formatMoney, formatTime } from "./format";
 import { Loadout } from "./Loadout";
@@ -46,7 +47,16 @@ export function Hub(props: HubProps) {
       </header>
       <main class="hub-main">
         {props.lastResult && <ResultBanner result={props.lastResult} onDismiss={props.onDismissResult} />}
-        {tab === "loadout" && <Loadout profile={profile} onChange={props.onChange} onDeploy={props.onDeploy} />}
+        {props.lastResult?.extractAt && (
+          <CampPicker
+            map={props.map}
+            mapImage={props.mapImage}
+            profile={profile}
+            center={props.lastResult.extractAt}
+            onChange={props.onChange}
+          />
+        )}
+        {tab === "loadout" && <Loadout profile={profile} mapName={props.map.name} onChange={props.onChange} onDeploy={props.onDeploy} />}
         {tab === "craft" && <Craft profile={profile} onChange={props.onChange} />}
         {tab === "stash" && <Stash profile={profile} />}
         {tab === "save" && <SaveTab onExport={props.onExport} onImport={props.onImport} onReset={props.onReset} />}

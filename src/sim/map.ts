@@ -112,7 +112,7 @@ export class GameMap {
   /** セルごとの建物の番号（json.buildings の添字）。建物でなければ -1 */
   readonly buildingIndex: Int32Array;
 
-  /** プレイヤーの出発地点から歩いて行けるセル。setReach するまでは null */
+  /** 歩いて行けるセル（一番広くつながった範囲）。setReachMain するまでは null */
   reach: Uint8Array | null = null;
   private gScore: Float32Array;
   private came: Int32Array;
@@ -239,8 +239,38 @@ export class GameMap {
     }
   }
 
-  setReach(from: Vec) {
-    this.reach = this.reachable(from);
+  /** 歩いて行けるセルを、一番広くつながった範囲にする。出発地点がどこでも同じ結果になる */
+  setReachMain() {
+    if (this.reach) return;
+    const n = this.w * this.h;
+    const label = new Int32Array(n).fill(-1);
+    let best = -1, bestSize = 0, id = 0;
+    for (let s = 0; s < n; s++) {
+      if (label[s] >= 0 || this.solid[s] !== Solid.free) continue;
+      const q = [s];
+      label[s] = id;
+      let size = 0;
+      while (q.length) {
+        const i = q.pop()!;
+        size++;
+        const x = i % this.w, y = (i / this.w) | 0;
+        const ns = [x > 0 ? i - 1 : -1, x < this.w - 1 ? i + 1 : -1, y > 0 ? i - this.w : -1, y < this.h - 1 ? i + this.w : -1];
+        for (const m of ns) {
+          if (m >= 0 && label[m] < 0 && this.solid[m] === Solid.free) {
+            label[m] = id;
+            q.push(m);
+          }
+        }
+      }
+      if (size > bestSize) {
+        bestSize = size;
+        best = id;
+      }
+      id++;
+    }
+    const mark = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (label[i] === best) mark[i] = 1;
+    this.reach = mark;
   }
 
   /** 歩いて行ける場所か */
@@ -248,27 +278,6 @@ export class GameMap {
     const cx = Math.floor(x), cy = Math.floor(y);
     if (this.blocked(cx, cy)) return false;
     return !this.reach || this.reach[cx + cy * this.w] === 1;
-  }
-
-  /** a から到達できるセルの一覧 */
-  reachable(a: Vec): Uint8Array {
-    const mark = new Uint8Array(this.w * this.h);
-    const start = Math.floor(a.x) + Math.floor(a.y) * this.w;
-    if (this.solid[start] !== Solid.free) return mark;
-    const q = [start];
-    mark[start] = 1;
-    while (q.length) {
-      const i = q.pop()!;
-      const x = i % this.w, y = (i / this.w) | 0;
-      const ns = [x > 0 ? i - 1 : -1, x < this.w - 1 ? i + 1 : -1, y > 0 ? i - this.w : -1, y < this.h - 1 ? i + this.w : -1];
-      for (const n of ns) {
-        if (n >= 0 && !mark[n] && this.solid[n] === Solid.free) {
-          mark[n] = 1;
-          q.push(n);
-        }
-      }
-    }
-    return mark;
   }
 
   findPath(a: Vec, b: Vec, maxNodes = 30000, avoid?: PathAvoid): Vec[] | null {

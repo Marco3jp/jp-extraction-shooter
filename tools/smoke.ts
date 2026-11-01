@@ -51,7 +51,7 @@ const map = new GameMap(json);
 // プレイヤーを置いたまま3分回し、敵どうしで何人倒れるか
 for (const seed of [1, 2, 3]) {
   const w = createWorld(map, seed, baseLoadout);
-  w.player.pos = { ...w.extract.pos };
+  w.player.pos = { ...w.extracts[0].pos };
   let worst = 0;
   const t0 = performance.now();
   for (let i = 0; i < 30 * 180; i++) {
@@ -64,7 +64,6 @@ for (const seed of [1, 2, 3]) {
       w.player.alive = true;
       w.player.health = 100;
     }
-    w.extract.progress = 0;
     worst = Math.max(worst, performance.now() - s);
   }
   const ms = performance.now() - t0;
@@ -79,12 +78,13 @@ for (const seed of [1, 2, 3]) {
 for (const seed of [1, 2]) {
   const w = createWorld(map, seed, baseLoadout);
   const p = w.player;
-  const route = map.findPath(p.pos, w.extract.pos, 400000) ?? [];
+  const goal = w.extracts.reduce((a, b) => (Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y) < Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y) ? a : b));
+  const route = map.findPath(p.pos, goal.pos, 400000) ?? [];
   let opened = 0;
   for (let i = 0; i < 30 * 300 && w.outcome === "playing"; i++) {
     const input = emptyInput();
     while (route.length && Math.hypot(route[0].x - p.pos.x, route[0].y - p.pos.y) < 0.8) route.shift();
-    const next = route[0] ?? w.extract.pos;
+    const next = route[0] ?? goal.pos;
     input.move = { x: next.x - p.pos.x, y: next.y - p.pos.y };
     input.sprint = true;
     const enemy = w.actors.find((a) => a.alive && a.team === "enemy" && a.seen);
@@ -99,11 +99,42 @@ for (const seed of [1, 2]) {
         opened++;
       }
     }
+    if (!l && goal.readyAt === null && Math.hypot(goal.pos.x - p.pos.x, goal.pos.y - p.pos.y) < 3) input.interact = true;
     step(w, input);
   }
   console.log(
     `seed=${seed} 漁りながら脱出: 結果=${w.outcome} ${w.time.toFixed(0)}秒 撃破 ${w.kills} 箱 ${opened}回 カバン ${bagUsed(w.bag)}枠 お金 ${w.bag.money}円 金属くず ${bagCount(w.bag, "junk")} 電子部品 ${bagCount(w.bag, "circuit")}`,
   );
+}
+
+// キャンプから始めると、その近くに出て、近くに敵がいない。迎えを呼ぶと近くの敵が寄ってくる
+{
+  const camp = { x: map.w * 0.2, y: map.h * 0.3 };
+  for (const seed of [1, 2, 3]) {
+    const w = createWorld(map, seed, baseLoadout, camp);
+    const p = w.player;
+    const off = Math.hypot(p.pos.x - camp.x, p.pos.y - camp.y);
+    const nearest = Math.min(...w.actors.filter((a) => a.team === "enemy").map((a) => Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y)));
+    const ex = w.extracts[seed % w.extracts.length];
+    p.pos = { ...ex.pos };
+    const input = emptyInput();
+    input.interact = true;
+    input.aim = { x: p.pos.x + 1, y: p.pos.y };
+    step(w, input);
+    const alerted = w.actors.filter((a) => a.ai && a.ai.target === p.id).length;
+    let t = 0;
+    while (w.outcome === "playing" && t < 30 * 30) {
+      const idle = emptyInput();
+      idle.aim = input.aim;
+      p.health = 100;
+      p.pos = { ...ex.pos };
+      step(w, idle);
+      t++;
+    }
+    console.log(
+      `seed=${seed} キャンプ: 出た位置のずれ ${off.toFixed(1)}m 一番近い敵 ${nearest.toFixed(0)}m　迎えを呼んで寄ってきた敵 ${alerted}人　脱出まで ${(t / 30).toFixed(1)}秒 結果=${w.outcome}`,
+    );
+  }
 }
 
 // 武器ごとに、敵1人と正面 18m から撃ち合って勝てるか（撃ち返すだけで動かないボット）

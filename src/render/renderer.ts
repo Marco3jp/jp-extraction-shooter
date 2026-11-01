@@ -8,10 +8,17 @@ import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, hash 
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
 import { DT, FRAG, THERMITE, type ThrowableId } from "../sim/data";
-import type { Actor, GameEvent, Loot, World } from "../sim/world";
+import type { Actor, Extract, GameEvent, Loot, World } from "../sim/world";
 
 const CAM_OFFSET = new THREE.Vector3(0, 56, 36);
 const GUN_Y = 1.0;
+
+/** 呼んでいない・迎えを待っている・迎えが来ている */
+export const EXTRACT_COLORS = { idle: 0x7fbf9a, called: 0xffc84a, ready: 0x50ff9a };
+
+export function extractColor(e: Extract): number {
+  return e.ready ? EXTRACT_COLORS.ready : e.readyAt !== null ? EXTRACT_COLORS.called : EXTRACT_COLORS.idle;
+}
 
 export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff };
 
@@ -132,8 +139,8 @@ export class Renderer {
   private aimLine: THREE.Line;
   private spreadLines: THREE.LineSegments;
   private beaconRing: THREE.Mesh;
-  private extractBeam: THREE.Mesh;
-  private extractRing: THREE.Mesh;
+  /** 脱出地点ごとの光の柱と足元の輪。world.extracts と同じ並び */
+  private extractMarks: { beam: THREE.Mesh; ring: THREE.Mesh }[] = [];
   private bins: THREE.InstancedMesh;
   private binLids: THREE.InstancedMesh;
   private binStripes: THREE.InstancedMesh;
@@ -252,17 +259,6 @@ export class Renderer {
     this.beaconRing.rotation.x = -Math.PI / 2;
     this.scene.add(this.beaconRing);
 
-    this.extractBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(EXTRACT_RADIUS, EXTRACT_RADIUS, 30, 48, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0x50ff9a, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }),
-    );
-    this.scene.add(this.extractBeam);
-    this.extractRing = new THREE.Mesh(
-      new THREE.RingGeometry(EXTRACT_RADIUS - 0.3, EXTRACT_RADIUS, 64),
-      new THREE.MeshBasicMaterial({ color: 0x50ff9a, transparent: true, opacity: 0.8, depthWrite: false }),
-    );
-    this.extractRing.rotation.x = -Math.PI / 2;
-    this.scene.add(this.extractRing);
 
     this.grenadeMesh = instanced(new THREE.SphereGeometry(0.2, 10, 8), new THREE.MeshLambertMaterial({ color: 0xffffff }), 64);
     this.flameMesh = instanced(
@@ -397,6 +393,36 @@ export class Renderer {
 
     const geo = mb.geometry();
     this.scene.add(new THREE.Mesh(geo, this.buildingMat));
+  }
+
+  private drawExtracts(w: World) {
+    while (this.extractMarks.length < w.extracts.length) {
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(EXTRACT_RADIUS, EXTRACT_RADIUS, 30, 48, 1, true),
+        new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(EXTRACT_RADIUS - 0.3, EXTRACT_RADIUS, 64),
+        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+      );
+      ring.rotation.x = -Math.PI / 2;
+      this.scene.add(beam, ring);
+      this.extractMarks.push({ beam, ring });
+    }
+    this.extractMarks.forEach(({ beam, ring }, i) => {
+      const e = w.extracts[i];
+      beam.visible = ring.visible = !!e;
+      if (!e) return;
+      beam.position.set(e.pos.x, 15, e.pos.y);
+      ring.position.set(e.pos.x, 0.07, e.pos.y);
+      const bm = beam.material as THREE.MeshBasicMaterial, rm = ring.material as THREE.MeshBasicMaterial;
+      const color = extractColor(e);
+      bm.color.setHex(color);
+      rm.color.setHex(color);
+      const pulse = Math.sin(this.time * 3) * 0.04;
+      bm.opacity = e.ready ? 0.14 + pulse : e.readyAt !== null ? 0.09 + pulse : 0.04;
+      rm.opacity = e.readyAt !== null ? 0.85 : 0.45;
+    });
   }
 
   reset() {
@@ -794,9 +820,7 @@ export class Renderer {
 
     this.beaconRing.position.set(px, 0.06, py);
     this.beaconRing.visible = w.debug.beaconLevel > 0;
-    this.extractBeam.position.set(w.extract.pos.x, 15, w.extract.pos.y);
-    this.extractRing.position.set(w.extract.pos.x, 0.07, w.extract.pos.y);
-    (this.extractBeam.material as THREE.MeshBasicMaterial).opacity = 0.1 + Math.sin(this.time * 3) * 0.04;
+    this.drawExtracts(w);
 
     this.gl.render(this.scene, this.camera);
   }

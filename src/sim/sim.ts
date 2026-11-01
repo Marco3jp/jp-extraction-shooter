@@ -3,13 +3,13 @@ import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
-  BEACON_RADIUS, DASH, DT, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
+  BEACON_RADIUS, DASH, DT, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PICKUP_RANGE, RELOAD_MOVE_SPEED, SIGHT_RANGE, SPRINT_SPEED, SPRINT_TO_FIRE, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
 import { bagAdd, sortBag } from "./inventory";
 import { throwGrenade, updateThrowables } from "./throwables";
 import type { Vec } from "./map";
-import type { Actor, Loot, World } from "./world";
+import type { Actor, Extract, Loot, World } from "./world";
 
 export type Command =
   | { type: "open"; loot: number }
@@ -55,6 +55,22 @@ export function nearestLoot(w: World, range = PICKUP_RANGE, containersOnly = fal
     }
   }
   return best;
+}
+
+/** プレイヤーが中にいる脱出地点 */
+export function extractAt(w: World, pos: Vec): Extract | null {
+  return w.extracts.find((e) => dist(e.pos, pos) <= EXTRACT_RADIUS) ?? null;
+}
+
+/** 迎えを呼ぶ。呼んだ音で、近くの敵が呼んだ人を狙って寄ってくる */
+function callExtract(w: World, e: Extract, caller: Actor) {
+  e.readyAt = w.time + EXTRACT_CALL_TIME;
+  w.events.push({ type: "extractCall", pos: { ...e.pos } });
+  w.events.push({ type: "notice", text: `脱出の迎えを呼んだ。${EXTRACT_CALL_TIME}秒で来る` });
+  for (const o of w.actors) {
+    if (!o.ai || !o.alive || !hostile(o, caller)) continue;
+    if (dist(o.pos, e.pos) < EXTRACT_CALL_HEAR) alert(w, o, caller.pos, caller, false);
+  }
 }
 
 /** 山を1つカバンへ移す。全部入ったら true */
@@ -134,6 +150,9 @@ function updatePlayer(w: World, input: Input) {
       w.lootVersion++;
       w.events.push({ type: "lootChanged" });
       w.events.push({ type: "lootOpened", loot: l.id });
+    } else {
+      const ex = extractAt(w, p.pos);
+      if (ex && ex.readyAt === null) callExtract(w, ex, p);
     }
   }
 
@@ -327,12 +346,17 @@ export function step(w: World, input: Input) {
   updateInfo(w);
 
   const p = w.player;
-  if (p.alive) {
-    if (dist(p.pos, w.extract.pos) <= EXTRACT_RADIUS) {
-      w.extract.progress += DT;
-      if (w.extract.progress >= EXTRACT_TIME) w.outcome = "extracted";
+  for (const e of w.extracts) {
+    if (!e.ready && e.readyAt !== null && w.time >= e.readyAt) {
+      e.ready = true;
+      w.events.push({ type: "extractReady", pos: { ...e.pos } });
+      w.events.push({ type: "notice", text: "脱出の迎えが来た" });
+    }
+    if (p.alive && e.ready && dist(p.pos, e.pos) <= EXTRACT_RADIUS) {
+      e.progress += DT;
+      if (e.progress >= EXTRACT_TIME) w.outcome = "extracted";
     } else {
-      w.extract.progress = 0;
+      e.progress = 0;
     }
   }
 }

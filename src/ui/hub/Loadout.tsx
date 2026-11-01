@@ -5,6 +5,7 @@ import { ARMORS, BAGS, SHOES } from "../../data/gear";
 import { WEAPON_BASES, type WeaponDef, type WeaponStat, type WeaponType } from "../../data/weapons";
 import {
   attachmentsFree,
+  campOn,
   profileWeapon,
   setAttachment,
   setLoadoutArmor,
@@ -18,11 +19,12 @@ import { ModList } from "./parts";
 
 type Props = {
   profile: Profile;
+  mapName: string;
   onChange: (next: Profile) => void;
   onDeploy: () => void;
 };
 
-export function Loadout({ profile, onChange, onDeploy }: Props) {
+export function Loadout({ profile, mapName, onChange, onDeploy }: Props) {
   const [editing, setEditing] = useState<WeaponType>(profile.loadout.weapons[0]);
   const target = profile.weapons.includes(editing) ? editing : profile.loadout.weapons[0];
 
@@ -94,6 +96,17 @@ export function Loadout({ profile, onChange, onDeploy }: Props) {
                 <span class="hub-chip-sub">{formatMoveMul(SHOES[s].moveMul) ?? "移動速度 そのまま"}</span>
               </button>
             ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">出発地点</div>
+          <div class="hub-chips">
+            <span class="hub-start">{campOn(profile, mapName) ? "キャンプ" : "マップの出発地点"}</span>
+            {campOn(profile, mapName) && (
+              <button class="hub-button" onClick={() => update((p) => (p.camp = null))}>
+                キャンプをたたむ
+              </button>
+            )}
           </div>
         </div>
         <button class="hub-deploy" onClick={onDeploy}>

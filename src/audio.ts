@@ -132,6 +132,12 @@ export class Sfx {
         case "pickup":
           this.tone([700, 1050], 0.05, 0.1);
           break;
+        case "extractCall":
+          this.tone([520, 780, 520, 780], 0.12, 0.2, "square");
+          break;
+        case "extractReady":
+          this.tone([660, 990, 1320], 0.1, 0.18, "triangle");
+          break;
       }
     }
   }

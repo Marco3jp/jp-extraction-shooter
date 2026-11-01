@@ -10,7 +10,9 @@ import { GameMap, type MapJson } from "./sim/map";
 import { nearestLoot, step } from "./sim/sim";
 import { LOOT_PANEL_RANGE } from "./sim/data";
 import { createWorld, type World } from "./sim/world";
-import { applyRunResult, defaultProfile, makeRunLoadout, type Profile } from "./meta/profile";
+import { applyRunResult, campOn, defaultProfile, makeRunLoadout, type Profile } from "./meta/profile";
+import { MapView } from "./mapview";
+import { extractAt } from "./sim/sim";
 import { exportProfile, importProfile, loadProfile, saveProfile } from "./meta/save";
 import { renderHub } from "./ui/hub";
 import type { LastRunSummary } from "./ui/hub/types";
@@ -26,6 +28,7 @@ async function main() {
   const renderer = new Renderer(app, map);
   const input = new InputState(app);
   const sfx = new Sfx();
+  const mapImage = new MapView(map).base;
 
   let profile: Profile = (await loadProfile()) ?? defaultProfile();
   let lastResult: LastRunSummary | null = null;
@@ -56,7 +59,7 @@ async function main() {
       <tr><td>3 / 4</td><td>シールド1個（2秒）／まとめて最大4個（5秒）</td></tr>
       <tr><td>5 / 6</td><td>ヘルス小（3.5秒）／ヘルス大（8秒）</td></tr>
       <tr><td>X・左クリック</td><td>回復をキャンセル（まとめて回復は何も回復しない）</td></tr>
-      <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）</td></tr>
+      <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）・脱出地点で迎えを呼ぶ</td></tr>
       <tr><td>Tab</td><td>持ち物（右クリックで捨てる）</td></tr>
       <tr><td>M</td><td>地図</td></tr>
       <tr><td>Esc / P</td><td>閉じる / ポーズ</td></tr>
@@ -67,6 +70,8 @@ async function main() {
     renderHub(hubEl, {
       profile,
       lastResult,
+      map,
+      mapImage,
       onChange: (next) => {
         profile = next;
         persist();
@@ -127,7 +132,7 @@ async function main() {
   };
 
   function deploy() {
-    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile));
+    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile), campOn(profile, map.name) ?? undefined);
     renderer.reset();
     hud.reset(world);
     hubEl.style.display = "none";
@@ -157,7 +162,8 @@ async function main() {
     const collected = { money: world.bag.money, materials };
     const gained = applyRunResult(profile, { outcome, kills: world.kills, ...collected });
     const lost = outcome === "dead" && DEATH_LOSES_RUN_LOOT ? collected : { money: 0, materials: {} };
-    lastResult = { outcome, time: world.time, kills: world.kills, gained, lost };
+    const ex = outcome === "extracted" ? extractAt(world, world.player.pos) : null;
+    lastResult = { outcome, time: world.time, kills: world.kills, gained, lost, extractAt: ex ? { ...ex.pos } : null };
     persist();
     showHub();
   };

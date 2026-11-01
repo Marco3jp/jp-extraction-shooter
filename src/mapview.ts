@@ -1,7 +1,7 @@
 import { BEACON_RADIUS, EXTRACT_RADIUS, factionDef } from "./sim/data";
 import { Solid, type GameMap, type Vec } from "./sim/map";
-import type { Actor, World } from "./sim/world";
-import { TYPE_COLORS } from "./render/renderer";
+import type { Actor, Extract, World } from "./sim/world";
+import { TYPE_COLORS, extractColor } from "./render/renderer";
 import { GROUND_COLORS } from "./render/cityscape";
 
 export type Ping = { pos: Vec; t: number };
@@ -19,7 +19,8 @@ function enemyColor(a: Actor): string | null {
 }
 
 export class MapView {
-  private base: HTMLCanvasElement;
+  /** 1m を1ピクセルにしたマップ全体の絵 */
+  readonly base: HTMLCanvasElement;
 
   constructor(private map: GameMap) {
     const c = document.createElement("canvas");
@@ -120,21 +121,29 @@ export class MapView {
       ctx.stroke();
     }
 
-    let ex = toS(w.extract.pos);
+    // ミニマップには近い3か所だけ出し、外れていれば縁に寄せる。呼んでいる所は遠くても出す
+    const d = (e: Extract) => Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y);
+    const shown = mini
+      ? [...w.extracts].sort((a, b) => d(a) - d(b)).filter((e, i) => i < 3 || e.readyAt !== null)
+      : w.extracts;
     const er = Math.max(5, EXTRACT_RADIUS * scale);
-    if (mini) {
-      const m = 8;
-      ex = { x: Math.max(m, Math.min(size - m, ex.x)), y: Math.max(m, Math.min(size - m, ex.y)) };
-    }
-    ctx.strokeStyle = "#50ff9a";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(ex.x, ex.y, er, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "#50ff9a";
     ctx.font = "bold 11px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("脱出", ex.x, ex.y - er - 3);
+    ctx.lineWidth = 2;
+    for (const e of shown) {
+      let ex = toS(e.pos);
+      if (mini) {
+        const m = 8;
+        ex = { x: Math.max(m, Math.min(size - m, ex.x)), y: Math.max(m, Math.min(size - m, ex.y)) };
+      }
+      const color = hex(extractColor(e));
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.arc(ex.x, ex.y, er, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.fillText("脱出", ex.x, ex.y - er - 3);
+    }
 
     ctx.save();
     ctx.translate(pc.x, pc.y);

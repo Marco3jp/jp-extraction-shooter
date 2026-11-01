@@ -3,8 +3,8 @@ import {
   DASH, THROWABLES, factionDef, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
-import { nearestLoot, type Command } from "./sim/sim";
-import type { Actor, GameEvent, Loot, World } from "./sim/world";
+import { extractAt, nearestLoot, type Command } from "./sim/sim";
+import type { Actor, Extract, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
 import { MapView, type Ping } from "./mapview";
 import { itemIcon } from "./ui/icons";
@@ -325,8 +325,11 @@ export class Hud {
     const prompt = $("#prompt");
     const loot = p.alive ? nearestLoot(w) : null;
     let promptHtml = "";
-    if (w.extract.progress > 0) {
-      promptHtml = `脱出中… ${(EXTRACT_TIME - w.extract.progress).toFixed(1)}秒`;
+    const inExtract = p.alive ? extractAt(w, p.pos) : null;
+    if (inExtract && inExtract.progress > 0) {
+      promptHtml = `脱出中… ${(EXTRACT_TIME - inExtract.progress).toFixed(1)}秒`;
+    } else if (inExtract && !loot && inExtract.readyAt === null) {
+      promptHtml = "[E] 脱出の迎えを呼ぶ（音で近くの敵が寄ってくる）";
     } else if (loot && !this.panel.open) {
       if (loot.kind === "ground") {
         const s = loot.items[0];
@@ -358,7 +361,8 @@ export class Hud {
     this.dmgTimer -= dt;
     $("#damage").style.opacity = String(Math.max(0, this.dmgTimer / 0.35) * 0.6 + (p.health < 40 && p.alive ? 0.25 : 0));
 
-    const ex = r.worldToScreen(w.extract.pos.x, w.extract.pos.y, 2);
+    const target = arrowTarget(w);
+    const ex = r.worldToScreen(target.pos.x, target.pos.y, 2);
     const arrow = $("#extract-arrow");
     const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     const onScreen = ex.visible && ex.x > 40 && ex.x < window.innerWidth - 40 && ex.y > 40 && ex.y < window.innerHeight - 40;
@@ -370,7 +374,9 @@ export class Hud {
       ay = Math.max(150, Math.min(window.innerHeight - 140, cy + dy * s));
     }
     arrow.style.transform = `translate(${ax}px, ${ay}px)`;
-    arrow.querySelector(".dist")!.textContent = `脱出 ${Math.round(Math.hypot(w.extract.pos.x - p.pos.x, w.extract.pos.y - p.pos.y))}m`;
+    const meters = Math.round(Math.hypot(target.pos.x - p.pos.x, target.pos.y - p.pos.y));
+    const wait = target.ready ? "　来ている" : target.readyAt !== null ? `　あと${Math.ceil(target.readyAt - w.time)}秒` : "";
+    arrow.querySelector(".dist")!.textContent = `脱出 ${meters}m${wait}`;
 
     this.feed = this.feed.filter((f) => w.time - f.t < FEED_LIFE);
     $("#feed").innerHTML = this.feed.map((f) => `<div>${f.text}</div>`).join("");
@@ -482,3 +488,14 @@ export class Hud {
   }
 }
 
+/** 矢印で指す脱出地点。呼んでいる所があればそこ、無ければ一番近い所 */
+function arrowTarget(w: World): Extract {
+  const called = w.extracts.find((e) => e.readyAt !== null);
+  if (called) return called;
+  const p = w.player.pos;
+  let best = w.extracts[0];
+  for (const e of w.extracts) {
+    if (Math.hypot(e.pos.x - p.x, e.pos.y - p.y) < Math.hypot(best.pos.x - p.x, best.pos.y - p.y)) best = e;
+  }
+  return best;
+}

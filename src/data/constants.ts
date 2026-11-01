@@ -18,7 +18,14 @@ export const SPRINT_TO_FIRE = 0.15;
 export const SIGHT_RANGE = 38;
 export const BEACON_RADIUS = 22;
 export const EXTRACT_RADIUS = 4;
-export const EXTRACT_TIME = 5;
+/** 迎えが来てから、中に何秒いれば脱出できるか */
+export const EXTRACT_TIME = 2;
+/** 脱出地点で E を押して呼んでから、迎えが来るまで（仮） */
+export const EXTRACT_CALL_TIME = 20;
+/** 呼んだ音が届いて、敵が寄ってくる距離（仮） */
+export const EXTRACT_CALL_HEAR = 60;
+/** 脱出した地点から、キャンプを置ける距離（仮） */
+export const CAMP_RADIUS = 150;
 export const PICKUP_RANGE = 2.2;
 /** 開いた箱から離れたら閉じる距離 */
 export const LOOT_PANEL_RANGE = 3.2;

@@ -437,3 +437,20 @@
 .hub-ok {
   color: var(--accent, #50ff9a);
 }
+
+.hub-camp {
+  margin-top: 12px;
+}
+.hub-camp-map {
+  display: block;
+  width: 340px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  border: 1px solid var(--hub-line);
+  cursor: crosshair;
+}
+.hub-start {
+  align-self: center;
+  margin-right: 8px;
+}

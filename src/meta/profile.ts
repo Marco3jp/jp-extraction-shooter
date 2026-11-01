@@ -24,7 +24,12 @@ export type Profile = {
   shoes: ShoesId[];
   loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId };
   stats: { runs: number; extractions: number; deaths: number; kills: number };
+  /** ランを始める場所。null ならマップの出発地点から */
+  camp: Camp | null;
 };
+
+/** x・y はマップのマス目の座標 */
+export type Camp = { map: string; x: number; y: number };
 
 export function defaultProfile(): Profile {
   const weaponConfig = {} as Profile["weaponConfig"];
@@ -41,6 +46,7 @@ export function defaultProfile(): Profile {
     shoes: ["standard"],
     loadout: { weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard" },
     stats: { runs: 0, extractions: 0, deaths: 0, kills: 0 },
+    camp: null,
   };
 }
 
@@ -156,6 +162,13 @@ export function craft(p: Profile, recipeId: string): boolean {
     case "shoes": p.shoes.push(o.id); break;
   }
   return true;
+}
+
+// ---- キャンプ ----
+
+/** そのマップでのキャンプの位置。別のマップのキャンプなら null */
+export function campOn(p: Profile, map: string): { x: number; y: number } | null {
+  return p.camp && p.camp.map === map ? { x: p.camp.x, y: p.camp.y } : null;
 }
 
 // ---- ランとのやりとり ----
