@@ -23,6 +23,7 @@ from collections import Counter
 # -I で起動するとスクリプトの置き場所が import の検索先から外れるので、tools/ だけを足す
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buildings import ZONE_OF_LANDUSE, classify, clean_road_name, clean_station_name, is_station  # noqa: E402
+from extracts import place_extracts  # noqa: E402
 from travel import place_travel  # noqa: E402
 
 # 地面の種類。src/sim/map.ts の Ground と揃える
@@ -56,7 +57,7 @@ ENCLOSED_LOT_MIN = 40
 # 建物と建物・歩道に挟まれた、この幅（m）以下の空き地は建物を伸ばして埋める
 NARROW_STRIP = 4
 ENCLOSED_LOT_MAX = 600
-# 塞がったマスに囲まれた空き地のうち、この広さ（㎡）以下は埋める
+# つながっていないので埋めた空き地がこの広さ（㎡）より広ければ、置き方を見直せるように知らせる
 POCKET_MAX = 400
 
 
@@ -469,9 +470,9 @@ def main():
             else:
                 place(x, y, 1, 3, "barrier")
 
-    # 塞がったマスに囲まれて入れない空き地は、隣の建物を広げて埋める。ゲームは敵や箱を置く場所を、空いたマスから選ぶだけで決めている
+    # 一番広い空き地とつながっていない空き地は、隣の建物を広げて埋める。ゲームは敵や箱を置く場所を、空いたマスから選ぶだけで決めている
     seen = grid(W, H, False)
-    wide = 0
+    comps = []
     for y in range(H):
         for x in range(W):
             if seen[y][x] or solid[y][x] != FREE:
@@ -486,29 +487,29 @@ def main():
                     if 0 <= nx < W and 0 <= ny < H and not seen[ny][nx] and solid[ny][nx] == FREE:
                         seen[ny][nx] = True
                         comp.append((nx, ny))
-            if len(comp) > POCKET_MAX:
-                wide += 1
-                continue
-            todo = comp
-            while todo:
-                rest = []
-                for cx, cy in todo:
-                    around = [bid[ny][nx] for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1))
-                              if 0 <= nx < W and 0 <= ny < H and bid[ny][nx] >= 0]
-                    if around:
-                        bid[cy][cx] = around[0]
-                        solid[cy][cx] = BUILDING
-                    else:
-                        rest.append((cx, cy))
-                if len(rest) == len(todo):
-                    # 範囲の外と遮蔽物だけに囲まれている。範囲の外の扱いにする
-                    for cx, cy in rest:
-                        solid[cy][cx] = BUILDING
-                        ground[cy][cx] = OUTSIDE
-                    break
-                todo = rest
-    if wide > 1:
-        print(f"警告: {POCKET_MAX}㎡ より広い空き地が {wide} か所あり、互いにつながっていない")
+            comps.append(comp)
+    comps.sort(key=len, reverse=True)
+    for comp in comps[1:]:
+        if len(comp) > POCKET_MAX:
+            print(f"警告: {len(comp)}㎡ の空き地がつながっていないので埋めた（左上 {OX + min(c[0] for c in comp)},{OY + min(c[1] for c in comp)}）")
+        todo = comp
+        while todo:
+            rest = []
+            for cx, cy in todo:
+                around = [bid[ny][nx] for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1))
+                          if 0 <= nx < W and 0 <= ny < H and bid[ny][nx] >= 0]
+                if around:
+                    bid[cy][cx] = around[0]
+                    solid[cy][cx] = BUILDING
+                else:
+                    rest.append((cx, cy))
+            if len(rest) == len(todo):
+                # 範囲の外と遮蔽物だけに囲まれている。範囲の外の扱いにする
+                for cx, cy in rest:
+                    solid[cy][cx] = BUILDING
+                    ground[cy][cx] = OUTSIDE
+                break
+            todo = rest
 
     # 建物ごとに長方形へまとめる（描画用）
     rects_by_b = {}
@@ -561,7 +562,9 @@ def main():
     def game(lat, lon):
         return [round((lon - ORIGIN_LON) * mx, 2), round((ORIGIN_LAT - lat) * my, 2)]
 
-    layout = dict(start=game(*cfg["layout"]["start"]), extracts=[game(*e) for e in cfg["layout"]["extracts"]])
+    start = game(*cfg["layout"]["start"])
+    extracts = place_extracts(W, H, ground, solid, road_lines, features, travel, (start[0] - OX, start[1] - OY))
+    layout = dict(start=start, extracts=[[round(x + OX, 2), round(y + OY, 2)] for x, y, _, _ in extracts])
     sizes = write_chunks(cfg, OX, OY, W, H, inside, layout, ground, solid, btype, out_b, covers, features, travel)
     print(f"区画 {len(sizes)} 個、1区画 平均 {sum(sizes) / len(sizes) / 1024:.1f}KB・最大 {max(sizes) / 1024:.1f}KB")
     types = Counter(b["type"] for b in out_b)
@@ -572,6 +575,7 @@ def main():
     print(f"横断歩道 {len(m['crosswalks'])} 停止線 {len(m['stops'])} 中央線 {len(m['lines'])} マンホール {len(m['manholes'])}"
           f" 標識 {len(features['signs'])} 町名 {[a['name'] for a in features['areas']]}")
     rl = [math.hypot(r[2] - r[0], r[3] - r[1]) for r in travel["rails"]]
+    print(f"脱出地点 {len(extracts)} か所:", Counter(k for _, _, k, _ in extracts), sorted(Counter(a for _, _, _, a in extracts).items()))
     print(f"固定レール {len(rl)} 本（合計 {sum(rl):.0f}m・最長 {max(rl, default=0):.0f}m）ダッシュパッド {len(travel['pads'])} 個")
 
     if preview:

@@ -925,8 +925,10 @@ const rich = (): Profile => {
 
 // 固定レール・ダッシュパッド・自転車
 {
+  // E は拾うのがレールに乗るより先なので、乗り場の近くに落ちている物も片付ける
   const quiet = (w: World) => {
     for (const a of w.actors) if (a.team === "enemy") a.alive = false;
+    w.loot = [];
   };
   const near = (a: Vec, b: Vec, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
 
