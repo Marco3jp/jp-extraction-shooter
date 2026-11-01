@@ -1,6 +1,7 @@
 import { ATTACHMENTS, SLOT_ORDER, type AttachmentId, type SlotId } from "../data/attachments";
 import { DEATH_LOSES_RUN_LOOT, START_AMMO_MAGS, START_HEALS } from "../data/constants";
 import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES, type ArmorId, type BagId, type BikeId, type SecureBagId, type ShoesId } from "../data/gear";
+import { DEVICE_KINDS, type DeviceKind } from "../data/devices";
 import { ITEMS, MATERIALS, type ItemId, type MaterialId } from "../data/items";
 import { RECIPES, type Recipe } from "../data/recipes";
 import { PARTNER_COUNT, type PartnerModel } from "../data/partners";
@@ -28,6 +29,10 @@ export type Profile = {
   secureBags: SecureBagId[];
   /** 保管庫にある、ラン中に使う物 */
   items: { revive: number };
+  /** 作って、まだ置いていない設置物の数。全部持ち込む */
+  devices: Record<DeviceKind, number>;
+  /** マップに置いてある設置物 */
+  placed: PlacedDevice[];
   /** revive は蘇生アイテムを1個持ち込むか */
   loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId; bike: BikeId; secureBag: SecureBagId; revive: boolean } & KitChoice;
   stats: { runs: number; extractions: number; deaths: number; kills: number };
@@ -39,6 +44,9 @@ export type Profile = {
 
 /** map はマップの id（public/maps/ の下のディレクトリ名）、x・y はゲームの座標 */
 export type Camp = { map: string; x: number; y: number };
+
+/** map はマップの id、x・y はゲームの座標 */
+export type PlacedDevice = { map: string; kind: DeviceKind; x: number; y: number };
 
 export function defaultProfile(): Profile {
   const weaponConfig = {} as Profile["weaponConfig"];
@@ -56,6 +64,8 @@ export function defaultProfile(): Profile {
     bikes: ["none"],
     secureBags: ["none"],
     items: { revive: 0 },
+    devices: { sensor: 0, turret: 0 },
+    placed: [],
     loadout: {
       weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard", bike: "none", secureBag: "none", revive: false,
       skill: "overshield", passive: "killShield", ult: "barrier",
@@ -77,6 +87,8 @@ export function normalizeProfile(p: Partial<Profile>): Profile {
     loadout: { ...d.loadout, ...(p.loadout ?? {}) },
     stats: { ...d.stats, ...(p.stats ?? {}) },
     items: { ...d.items, ...(p.items ?? {}) },
+    devices: { ...d.devices, ...(p.devices ?? {}) },
+    placed: p.placed ?? [],
     partners: d.partners.map((x, i) => {
       const y = { ...x, ...(p.partners?.[i] ?? {}) };
       if (![0, 1, 2].includes(y.model)) y.model = 0;
@@ -238,6 +250,7 @@ export function craft(p: Profile, recipeId: string): boolean {
     case "shoes": p.shoes.push(o.id); break;
     case "bike": p.bikes.push(o.id); break;
     case "secureBag": p.secureBags.push(o.id); break;
+    case "device": p.devices[o.id]++; break;
     case "partner": {
       const x = p.partners[o.index];
       if (x.model === 0) x.enabled = true;
@@ -276,9 +289,14 @@ export type RunLoadout = {
   startItems: [ItemId, number][];
   /** 連れていくパートナーの番号（0 始まり）と型 */
   partners: { index: number; model: 1 | 2 }[];
+  devices: RunDevices;
 };
 
-export function makeRunLoadout(p: Profile): RunLoadout {
+/** 持ち込む設置物の数と、そのマップに置いてある設置物 */
+export type RunDevices = { carried: Record<DeviceKind, number>; placed: { kind: DeviceKind; x: number; y: number }[] };
+
+/** map を渡さなければ、置いてある設置物は持ち込まない */
+export function makeRunLoadout(p: Profile, map?: string): RunLoadout {
   const weapons = p.loadout.weapons.map((t) => profileWeapon(p, t));
   const startItems: [ItemId, number][] = weapons.map((w) => [w.ammo, w.mag * START_AMMO_MAGS]);
   startItems.push(...START_HEALS);
@@ -296,6 +314,10 @@ export function makeRunLoadout(p: Profile): RunLoadout {
     revive: p.loadout.revive && p.items.revive > 0 ? 1 : 0,
     startItems,
     partners: p.partners.flatMap((x, index) => (x.enabled && x.model > 0 ? [{ index, model: x.model as 1 | 2 }] : [])),
+    devices: {
+      carried: { ...p.devices },
+      placed: p.placed.filter((d) => d.map === map).map(({ kind, x, y }) => ({ kind, x, y })),
+    },
   };
 }
 
@@ -315,6 +337,8 @@ export type RunResult = {
   secure: Haul;
   /** 持ち込んだ蘇生アイテムを使ったか */
   usedCarriedRevive: boolean;
+  /** ランを終えたときの設置物。map はランのマップの id。無ければ設置物は変えない */
+  devices?: RunDevices & { map: string };
 };
 
 function addHaul(p: Profile, h: Haul) {
@@ -332,6 +356,12 @@ export function applyRunResult(p: Profile, r: RunResult): { gained: Haul; lost: 
   if (r.usedCarriedRevive) {
     p.items.revive = Math.max(0, p.items.revive - 1);
     if (p.items.revive <= 0) p.loadout.revive = false;
+  }
+  if (r.devices) {
+    // 置いていない物は死んでも失わない。壊されたタレットは placed から消えている
+    const { map, carried, placed } = r.devices;
+    for (const k of DEVICE_KINDS) p.devices[k] = carried[k];
+    p.placed = [...p.placed.filter((d) => d.map !== map), ...placed.map((d) => ({ map, ...d }))];
   }
   const keepBag = r.outcome === "extracted" || !DEATH_LOSES_RUN_LOOT;
   addHaul(p, r.secure);

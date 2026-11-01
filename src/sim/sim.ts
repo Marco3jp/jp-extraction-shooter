@@ -1,17 +1,19 @@
 import { alert, hostile, updateEnemy } from "./ai";
+import { callExtract, tickDefense } from "./defense";
+import { deviceNear, pickupDevice, placeDevice, sensorLevel, tickDevices } from "./devices";
 import { applyBuff, canGiveBuff, GIVE_RANGE, hasBuff } from "./buffs";
 import { updatePartner } from "./partner";
 import {
   applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
-  BEACON_RADIUS, BIKE_ACCEL, DASH, DT, ENEMY_ACTIVE_RANGE, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
+  BEACON_RADIUS, BIKE_ACCEL, DASH, DT, FIXED_RAIL, ENEMY_ACTIVE_RANGE, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
   PARTNER_REVIVE, PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE,
-  SECURABLE, type BuffId, type HealKind, type ItemId, type ThrowableId,
+  SECURABLE, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
 import { syncSpawns } from "./spawn";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
-import { bagAdd, sortBag, type Bag } from "./inventory";
+import { bagAdd, bagCount, bagRemove, sortBag, type Bag } from "./inventory";
 import { cancelEvac, evacStep, flying, launchEvac } from "./evac";
 import { throwGrenade, updateThrowables } from "./throwables";
 import { onBike, padLaunch, startDismount, tickBike, toggleBike } from "./travel";
@@ -52,13 +54,15 @@ export type Input = {
   ult: boolean;
   /** 自転車に乗る・降りる（C） */
   bike: boolean;
+  /** 設置物を足元に置く（Z：センサー、V：タレット） */
+  place: DeviceKind | null;
   commands: Command[];
 };
 
 export const emptyInput = (): Input => ({
   move: { x: 0, y: 0 }, aim: { x: 0, y: 0 },
   fire: false, sprint: false, reload: false, swap: null, heal: null, cancel: false, interact: false, interactHeld: false,
-  dash: false, throw: null, skill: false, ult: false, bike: false,
+  dash: false, throw: null, skill: false, ult: false, bike: false, place: null,
   commands: [],
 });
 
@@ -82,17 +86,6 @@ export function nearestLoot(w: World, range = PICKUP_RANGE, containersOnly = fal
 /** プレイヤーが中にいる脱出地点 */
 export function extractAt(w: World, pos: Vec): Extract | null {
   return w.extracts.find((e) => dist(e.pos, pos) <= EXTRACT_RADIUS) ?? null;
-}
-
-/** 迎えを呼ぶ。呼んだ音で、近くの敵が呼んだ人を狙って寄ってくる */
-function callExtract(w: World, e: Extract, caller: Actor) {
-  e.readyAt = w.time + EXTRACT_CALL_TIME;
-  w.events.push({ type: "extractCall", pos: { ...e.pos } });
-  w.events.push({ type: "notice", text: `脱出の迎えを呼んだ。${EXTRACT_CALL_TIME}秒で来る` });
-  for (const o of w.actors) {
-    if (!o.ai || !o.alive || !hostile(o, caller)) continue;
-    if (dist(o.pos, e.pos) < EXTRACT_CALL_HEAR) alert(w, o, caller.pos, caller, false);
-  }
 }
 
 /** 起こせる距離にいる、倒れたパートナーのうち一番近いもの */
@@ -277,8 +270,18 @@ function updatePlayer(w: World, input: Input) {
     } else {
       const ex = extractAt(w, p.pos);
       const rail = p.ride ? null : nearRail(w, p, input.aim);
+      const dev = deviceNear(w);
       if (ex && ex.readyAt === null) callExtract(w, ex, p);
-      else if (rail) boardRail(p, rail);
+      else if (dev) pickupDevice(w, dev);
+      else if (rail && rail.rail.owner === null && bagCount(w.bag, "junk") < FIXED_RAIL.fare) {
+        w.events.push({ type: "notice", text: `固定レールの維持費（${ITEMS.junk.name} ${FIXED_RAIL.fare}個）が足りない` });
+      } else if (rail) {
+        if (rail.rail.owner === null) {
+          bagRemove(w.bag, "junk", FIXED_RAIL.fare);
+          w.events.push({ type: "lootChanged" });
+        }
+        boardRail(p, rail);
+      }
     }
   }
 
@@ -294,6 +297,7 @@ function updatePlayer(w: World, input: Input) {
   const aimAng = Math.atan2(input.aim.y - p.pos.y, input.aim.x - p.pos.x);
   p.facing = aimAng;
   if (input.throw && !biking) throwGrenade(w, p, input.throw, input.aim);
+  if (input.place && p.alive && !p.ride && !flying(p)) placeDevice(w, input.place);
 
   let mx = input.move.x, my = input.move.y;
   const ml = Math.hypot(mx, my);
@@ -392,12 +396,15 @@ function separate(w: World) {
       const r = a.radius + b.radius;
       const d2 = dx * dx + dy * dy;
       if (d2 >= r * r || d2 < 1e-6) continue;
+      // タレットは動かさず、相手だけを押す
+      const ka = a.team === "device" ? 0 : 1, kb = b.team === "device" ? 0 : 1;
+      if (ka + kb === 0) continue;
       const d = Math.sqrt(d2);
-      const push = (r - d) / 2;
-      a.pos.x -= (dx / d) * push;
-      a.pos.y -= (dy / d) * push;
-      b.pos.x += (dx / d) * push;
-      b.pos.y += (dy / d) * push;
+      const push = (r - d) / (ka + kb);
+      a.pos.x -= (dx / d) * push * ka;
+      a.pos.y -= (dy / d) * push * ka;
+      b.pos.x += (dx / d) * push * kb;
+      b.pos.y += (dy / d) * push * kb;
     }
   }
 }
@@ -486,6 +493,7 @@ function updateInfo(w: World) {
     const partnerSees = !e.seen && partners.some((o) => dist(o.pos, e.pos) <= SIGHT_RANGE && w.map.los(o.pos, e.pos));
     let level = e.seen || partnerSees ? w.debug.sightLevel : 0;
     if (d <= BEACON_RADIUS) level = Math.max(level, w.debug.beaconLevel);
+    level = Math.max(level, sensorLevel(w, e));
     if (w.time < e.revealUntil) level = Math.max(level, SCAN.level);
     e.info = level;
   }
@@ -518,6 +526,7 @@ export function step(w: World, input: Input) {
     else if (Math.hypot(a.pos.x - pp.x, a.pos.y - pp.y) <= ENEMY_ACTIVE_RANGE) updateEnemy(w, a, byId);
     else a.vel = { x: 0, y: 0 };
   }
+  tickDevices(w, byId);
 
   for (const a of w.actors) {
     if (!a.alive || flying(a)) continue;
@@ -531,6 +540,7 @@ export function step(w: World, input: Input) {
   hearShots(w, byId);
   updateBullets(w, byId);
   updateThrowables(w, byId);
+  tickDefense(w);
   updateInfo(w);
   // 起こしている途中で撃たれたら押し直し
   if (w.events.some((ev) => ev.type === "hit" && ev.actor === w.player.id)) {

@@ -23,7 +23,7 @@ export function padLaunch(w: World, a: Actor, move: Vec): boolean {
   a.dashSpeed = DASH_PAD.distance / DASH_PAD.time;
   a.dashSteer = false;
   a.sprinting = false;
-  w.events.push({ type: "dash", actor: a.id, pos: { ...a.pos }, dir: { ...a.dashDir } });
+  w.events.push({ type: "dash", actor: a.id, pos: { ...a.pos }, dir: { ...a.dashDir }, pad: true });
   return true;
 }
 

@@ -888,3 +888,51 @@ body {
 #inventory .grid.secure .slot {
   outline: 1px dashed #ffc030;
 }
+
+#defense {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  width: 340px;
+  padding: 8px 12px;
+  background: rgba(10, 14, 20, 0.78);
+  border: 1px solid rgba(255, 210, 90, 0.5);
+  border-radius: 6px;
+  color: #f2e6c4;
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+#defense .bar {
+  position: relative;
+  height: 6px;
+  margin-top: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#defense .fill {
+  height: 100%;
+  width: 0;
+  background: #ffd25a;
+}
+#defense.out { border-color: rgba(255, 110, 90, 0.7); }
+#defense.out .fill { background: #c08a50; }
+
+#devices {
+  position: absolute;
+  right: 16px;
+  bottom: 176px;
+  display: flex;
+  gap: 6px;
+}
+#devices .item {
+  min-width: 96px;
+  padding: 5px 6px;
+}
+#devices .item .count {
+  font-size: 12px;
+  white-space: nowrap;
+}

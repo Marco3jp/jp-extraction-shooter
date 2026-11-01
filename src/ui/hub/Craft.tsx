@@ -1,5 +1,6 @@
 import { ATTACHMENTS, SLOTS } from "../../data/attachments";
 import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES } from "../../data/gear";
+import { DEVICE_ACTIVE_RANGE, DEVICES } from "../../data/devices";
 import { ITEMS, MATERIALS } from "../../data/items";
 import { RECIPES, type Recipe, type RecipeCategory } from "../../data/recipes";
 import { WEAPON_BASES } from "../../data/weapons";
@@ -13,6 +14,7 @@ const CATEGORIES: { id: RecipeCategory; name: string }[] = [
   { id: "attachment", name: "アタッチメント" },
   { id: "weapon", name: "武器" },
   { id: "gear", name: "防具・カバン・靴・自転車" },
+  { id: "device", name: "設置物" },
   { id: "partner", name: "パートナー" },
 ];
 
@@ -102,6 +104,8 @@ function Output({ recipe }: { recipe: Recipe }) {
       return <span class="hub-recipe-name">{BIKES[o.id].name}</span>;
     case "secureBag":
       return <span class="hub-recipe-name">{SECURE_BAGS[o.id].name}</span>;
+    case "device":
+      return <span class="hub-recipe-name">{DEVICES[o.id].name}</span>;
     case "partner":
       return (
         <span class="hub-recipe-name">
@@ -137,6 +141,15 @@ function Detail({ recipe }: { recipe: Recipe }) {
       return <p class="hub-recipe-text">{formatBike(BIKES[o.id].speed, BIKES[o.id].mount)}。乗っている間は撃てない。撃たれると降りる</p>;
     case "secureBag":
       return <p class="hub-recipe-text">死んでも持ち帰れる枠 {SECURE_BAGS[o.id].slots}。素材と蘇生アイテムを入れられる</p>;
+    case "device":
+      return (
+        <p class="hub-recipe-text">
+          {o.id === "sensor"
+            ? `${DEVICES.sensor.radius}m 以内の敵の型が、壁越しに分かる`
+            : `${DEVICES.turret.range}m 以内の敵を撃つ。敵に狙われ、壊されたらなくなる`}
+          。ラン中に Z / V で足元に置き、置いた物は次のランでも残る。マップに{DEVICES[o.id].max}個まで。{DEVICE_ACTIVE_RANGE}m より離れると止まる
+        </p>
+      );
     case "partner":
       return (
         <p class="hub-recipe-text">
@@ -160,5 +173,12 @@ function Owned({ profile, recipe }: { profile: Profile; recipe: Recipe }) {
     );
   }
   if (o.kind === "material") return <span class="muted hub-owned">所持 {profile.materials[o.id] ?? 0}</span>;
+  if (o.kind === "device") {
+    return (
+      <span class="muted hub-owned">
+        手持ち {profile.devices[o.id]}・置いている {profile.placed.filter((d) => d.kind === o.id).length}
+      </span>
+    );
+  }
   return null;
 }

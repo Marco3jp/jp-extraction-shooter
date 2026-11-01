@@ -1,8 +1,9 @@
 import {
-  EVAC, EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SECURABLE, SHIELD_PER_CELL,
+  EVAC, FIXED_RAIL, EXTRACT_CALL_TIME, EXTRACT_DEFENSE, EXTRACT_RADIUS, EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SECURABLE, SHIELD_PER_CELL,
   BIKE_DISMOUNT, BUFFS, DASH, OVERSHIELD, PARTNER_REVIVE, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef,
-  type BuffId, type HealKind, type ItemId, type ThrowableId,
+  DEVICES, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
+import { deviceNear } from "./sim/devices";
 import { buffsOf, canGiveBuff, GIVE_RANGE } from "./sim/buffs";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
 import { downedPartnerNear, extractAt, nearestLoot, type Command } from "./sim/sim";
@@ -122,6 +123,16 @@ export class Hud {
     revive.style.setProperty("--c", stackColor({ item: "revive", count: 1 }));
     revive.innerHTML = `<span class="key">自動</span><span class="ic">${itemIcon("revive", 26)}</span><span class="name">蘇生</span><span class="count"></span>`;
     items.appendChild(revive);
+    for (const [kind, key] of [["sensor", "Z"], ["turret", "V"]] as const) {
+      const d = document.createElement("div");
+      d.className = "item device";
+      d.dataset.device = kind;
+      d.title = kind === "sensor"
+        ? `足元に置く。${DEVICES.sensor.radius}m 以内の敵の型が、壁越しに分かる`
+        : `足元に置く。${DEVICES.turret.range}m 以内の敵を撃つ。壊されたらなくなる`;
+      d.innerHTML = `<span class="key">${key}</span><span class="name">${DEVICES[kind].name}</span><span class="count"></span>`;
+      $("#devices").appendChild(d);
+    }
     const dash = document.createElement("div");
     dash.className = "item dash";
     dash.innerHTML = `<span class="key">Space</span><span class="name">ダッシュ</span><span class="count"></span><div class="cd"></div>`;
@@ -281,14 +292,14 @@ export class Hud {
         case "death": {
           const victim = byId.get(ev.actor);
           const killer = byId.get(ev.by);
-          if (!victim || victim === p) break;
+          if (!victim || victim === p || victim.team === "device") break;
           if (victim.team === "partner") {
             this.feedPush(`${partnerName(victim)}が倒れた（近くで E 長押しで起こす）`, w);
             break;
           }
           const near = Math.hypot(ev.pos.x - p.pos.x, ev.pos.y - p.pos.y) < 80;
           if (killer === p) this.feedPush(`${factionDef(victim.faction).name}を倒した`, w);
-          else if (near || victim.seen) this.feedPush(`${killer ? factionDef(killer.faction).name : "?"} が ${factionDef(victim.faction).name} を倒した`, w);
+          else if (near || victim.seen) this.feedPush(`${killer?.team === "device" ? DEVICES.turret.name : killer ? factionDef(killer.faction).name : "?"} が ${factionDef(victim.faction).name} を倒した`, w);
           break;
         }
       }
@@ -391,7 +402,7 @@ export class Hud {
       })
       .join("");
 
-    for (const el of Array.from($("#items").children) as HTMLElement[]) {
+    for (const el of [...Array.from($("#items").children), ...Array.from($("#devices").children)] as HTMLElement[]) {
       if (el.classList.contains("dash")) {
         const ready = p.dashCharges > 0;
         const full = p.dashCharges >= p.dashMax;
@@ -399,6 +410,13 @@ export class Hud {
         const charges = p.dashMax > 1 ? ` ×${p.dashCharges}` : "";
         el.querySelector(".count")!.textContent = ready && (full || p.dashMax > 1) ? `使える${charges}` : `${p.dashCd.toFixed(1)}`;
         (el.querySelector(".cd") as HTMLElement).style.width = `${full ? 100 : (1 - p.dashCd / (DASH.cooldown * p.dashCdMul)) * 100}%`;
+        continue;
+      }
+      const dev = el.dataset.device as DeviceKind | undefined;
+      if (dev) {
+        const placed = w.devices.filter((d) => d.kind === dev).length;
+        el.classList.toggle("empty", w.carried[dev] <= 0 || placed >= DEVICES[dev].max);
+        el.querySelector(".count")!.textContent = `${w.carried[dev]}　置 ${placed}/${DEVICES[dev].max}`;
         continue;
       }
       const n = bagCount(w.bag, el.dataset.item as ItemId) + (el.classList.contains("revive") ? w.carriedRevive : 0);
@@ -435,10 +453,14 @@ export class Hud {
         : `[E 長押し] ${partnerName(down)}を起こす（${PARTNER_REVIVE.time}秒。撃たれたら押し直し）`;
     } else if (inExtract && inExtract.progress > 0) {
       promptHtml = `脱出中… ${(EXTRACT_TIME - inExtract.progress).toFixed(1)}秒`;
+    } else if (!loot && !(inExtract && inExtract.readyAt === null) && deviceNear(w)) {
+      promptHtml = `[E] ${DEVICES[deviceNear(w)!.kind].name}を回収する`;
     } else if (inExtract && !loot && inExtract.readyAt === null) {
-      promptHtml = "[E] 脱出の迎えを呼ぶ（音で近くの敵が寄ってくる）";
+      promptHtml = `[E] 脱出の迎えを呼ぶ（${EXTRACT_CALL_TIME}秒耐える。周りの勢力が寄ってくる）`;
     } else if (!loot && p.alive && !p.ride && board) {
-      promptHtml = board.rail.owner === null ? "[E] 固定レールに乗る（端が集まっている所では、カーソルの向きの線を選ぶ）" : "[E] レールに乗る";
+      promptHtml = board.rail.owner === null
+        ? `[E] 固定レールに乗る（${ITEMS.junk.name} ${FIXED_RAIL.fare}個。手持ち ${bagCount(w.bag, "junk")}個）`
+        : "[E] レールに乗る";
     } else if (loot && !this.panel.open) {
       if (loot.kind === "ground") {
         const s = loot.items[0];
@@ -486,6 +508,8 @@ export class Hud {
     const meters = Math.round(Math.hypot(target.pos.x - p.pos.x, target.pos.y - p.pos.y));
     const wait = target.ready ? "　来ている" : target.readyAt !== null ? `　あと${Math.ceil(target.readyAt - w.time)}秒` : "";
     arrow.querySelector(".dist")!.textContent = `脱出 ${meters}m${wait}`;
+
+    this.updateDefense(w);
 
     this.feed = this.feed.filter((f) => w.time - f.t < FEED_LIFE);
     $("#feed").innerHTML = this.feed.map((f) => `<div>${f.text}</div>`).join("");
@@ -729,6 +753,29 @@ export class Hud {
     layer.appendChild(tag);
     this.tags.push(tag);
     return tag;
+  }
+
+  /** 迎えを待つ間の残り時間と、送った割合。バーは送れる上限（secureShare）を端にする */
+  private updateDefense(w: World) {
+    const el = $("#defense");
+    const d = w.defense;
+    const p = w.player;
+    if (!d || !p.alive || w.outcome !== "playing") {
+      el.style.display = "none";
+      return;
+    }
+    const ex = d.extract;
+    const inside = Math.hypot(p.pos.x - ex.pos.x, p.pos.y - ex.pos.y) <= EXTRACT_RADIUS;
+    const sent = Math.round(d.share * 100);
+    const max = Math.round(EXTRACT_DEFENSE.secureShare * 100);
+    let line: string;
+    if (ex.ready) line = `迎えが来た。円の中に${EXTRACT_TIME}秒いれば残りも持ち帰れる（送った分 ${sent}%）`;
+    else if (inside) line = `迎えまで ${Math.ceil(ex.readyAt! - w.time)}秒　持ち物を送っている ${sent}% / ${max}%`;
+    else line = `迎えまで ${Math.ceil(ex.readyAt! - w.time)}秒　円の外にいるので送るのが止まっている ${sent}% / ${max}%`;
+    el.style.display = "block";
+    el.classList.toggle("out", !inside && !ex.ready);
+    el.querySelector(".line")!.textContent = line;
+    (el.querySelector(".fill") as HTMLElement).style.width = `${(d.share / EXTRACT_DEFENSE.secureShare) * 100}%`;
   }
 }
 

@@ -213,10 +213,15 @@ function placeBarrier(w: World, a: Actor, aim: Vec): boolean {
     at = { x: a.pos.x + (at.x - a.pos.x) * k, y: a.pos.y + (at.y - a.pos.y) * k };
   }
   const alongX = Math.abs(Math.sin(ang)) > Math.abs(Math.cos(ang));
-  const cx = Math.floor(at.x), cy = Math.floor(at.y);
+  return raiseWall(w, a.id, Math.floor(at.x), Math.floor(at.y), alongX, BARRIER.length, BARRIER.hp, w.time + BARRIER.duration);
+}
+
+/** (cx, cy) のマスを真ん中に、マス目に沿って length マスの壁を立てる。人がいるマスと塞がったマスは飛ばす。owner は立てた人の番号 */
+export function raiseWall(w: World, owner: number, cx: number, cy: number, alongX: boolean, length: number, hp: number, until: number): boolean {
+  const map = w.map;
   const cells: Vec[] = [];
-  const half = Math.floor(BARRIER.length / 2);
-  for (let i = -half; i < BARRIER.length - half; i++) {
+  const half = Math.floor(length / 2);
+  for (let i = -half; i < length - half; i++) {
     const x = alongX ? cx + i : cx, y = alongX ? cy : cy + i;
     if (map.blocked(x, y)) continue;
     const occupied = w.actors.some((o) => {
@@ -229,7 +234,7 @@ function placeBarrier(w: World, a: Actor, aim: Vec): boolean {
   }
   if (!cells.length) return false;
   for (const c of cells) map.setSolid(c.x, c.y, Solid.cover);
-  w.barriers.push({ id: w.nextId++, owner: a.id, cells, hp: BARRIER.hp, until: w.time + BARRIER.duration });
+  w.barriers.push({ id: w.nextId++, owner, cells, hp, until });
   repathAll(w);
   return true;
 }

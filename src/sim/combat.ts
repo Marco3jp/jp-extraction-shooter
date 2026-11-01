@@ -240,7 +240,7 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
         target.ai.target = null;
         target.ai.state = "follow";
       }
-    } else {
+    } else if (target.team === "player") {
       w.outcome = "dead";
     }
   }

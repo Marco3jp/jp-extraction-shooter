@@ -1,5 +1,8 @@
-/** 地図に置いた固定レール。端から board m 以内で E を押すと、反対の端へ speed m/s で進む。進む間は撃てる。数値は仮 */
-export const FIXED_RAIL = { speed: 20, board: 3.5 };
+/**
+ * 地図に置いた固定レール。端から board m 以内で E を押すと、反対の端へ speed m/s で進む。進む間は撃てる。
+ * 乗るたびに維持費として fare 個の金属くずを払う。足りなければ乗れない。数値は仮
+ */
+export const FIXED_RAIL = { speed: 20, board: 3.5, fare: 1 };
 
 /**
  * ダッシュパッド。軸に沿って歩いて踏むと、歩いていた向きへ distance m を time 秒で飛ぶ。進む間は撃てる。

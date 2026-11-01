@@ -2,6 +2,7 @@ import { useState } from "preact/hooks";
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
 import { PLAYER_MIN_TTK } from "../../data/constants";
 import { ARMORS, BAGS, BIKES, SECURE_BAGS, SHOES } from "../../data/gear";
+import { DEVICE_KINDS, DEVICES } from "../../data/devices";
 import { ITEMS } from "../../data/items";
 import {
   PASSIVE_IDS, PASSIVES, SKILL_IDS, SKILLS, ULT_IDS, ULTS, type PassiveId, type SkillId, type UltId,
@@ -145,6 +146,19 @@ export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
               <span>{profile.loadout.revive ? "1個持ち込む" : "持ち込まない"}</span>
               <span class="hub-chip-sub">保管庫に {profile.items.revive}個。死んだら自動で使い、その場で立ち上がる</span>
             </button>
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">設置物</div>
+          <div class="hub-chips">
+            {DEVICE_KINDS.map((k) => (
+              <div class="hub-chip static">
+                <span>{DEVICES[k].name} ×{profile.devices[k]}</span>
+                <span class="hub-chip-sub">
+                  作った分は全部持ち込む。マップに置いている {profile.placed.filter((d) => d.kind === k).length}/{DEVICES[k].max}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
         <div class="hub-field">

@@ -11,8 +11,8 @@ import { ChunkLoader, fetchIndex } from "./maploader";
 import { ChunkStreamer } from "./stream";
 import { nearestLoot, step } from "./sim/sim";
 import { LOOT_PANEL_RANGE } from "./sim/data";
-import { createWorld, type World } from "./sim/world";
-import { applyRunResult, campOn, defaultProfile, makeRunLoadout, type Haul, type Profile } from "./meta/profile";
+import { createWorld, type Sent, type World } from "./sim/world";
+import { applyRunResult, campOn, defaultProfile, makeRunLoadout, mergeHaul, type Haul, type Profile } from "./meta/profile";
 import { MapView } from "./mapview";
 import { extractAt } from "./sim/sim";
 import { exportProfile, importProfile, loadProfile, saveProfile } from "./meta/save";
@@ -36,7 +36,7 @@ async function main() {
   let lastResult: LastRunSummary | null = null;
   const startOf = () => campOn(profile, map.index.id) ?? { x: map.index.layout.start[0], y: map.index.layout.start[1] };
   await streamer.loadAround(startOf());
-  let world: World = createWorld(map, 1, makeRunLoadout(profile));
+  let world: World = createWorld(map, 1, makeRunLoadout(profile, map.index.id));
   const hud = new Hud(world, mapView);
   hud.onCommand = (c) => input.command(c);
   let mode: Mode = "hub";
@@ -68,7 +68,8 @@ async function main() {
       <tr><td>（自動）</td><td>蘇生アイテム：死んだらその場でヘルス50で立ち上がる。拾った分を、持ち込んだ分より先に使う</td></tr>
       <tr><td>X・左クリック</td><td>回復をキャンセル（まとめて回復は何も回復しない）</td></tr>
       <tr><td>C</td><td>自転車に乗る・降りる（持ち込んだときだけ。乗っている間は撃てず、左クリックか撃たれると降りる）</td></tr>
-      <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）・脱出地点で迎えを呼ぶ・レールに乗る（固定レールは端から）</td></tr>
+      <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）・脱出地点で迎えを呼ぶ・置いた物を回収する・レールに乗る（固定レールは端から。乗るたびに金属くず1個）</td></tr>
+      <tr><td>Z / V</td><td>センサー / タレットを足元に置く（拠点で作った物。置いた物は次のランでも残る）</td></tr>
       <tr><td>（道の上）</td><td>黄色い板（ダッシュパッド）を、板の向きに沿って歩いて踏むと 30m 飛ぶ。飛んでいる間も撃てる</td></tr>
       <tr><td>E 長押し</td><td>倒れたパートナーを起こす（4秒。撃たれたら押し直し）</td></tr>
       <tr><td>Tab</td><td>持ち物（右クリックで捨てる）</td></tr>
@@ -148,7 +149,7 @@ async function main() {
     deploying = true;
     await streamer.loadAround(startOf());
     deploying = false;
-    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile), campOn(profile, map.index.id) ?? undefined);
+    world = createWorld(map, (Math.random() * 2 ** 31) | 0, makeRunLoadout(profile, map.index.id), campOn(profile, map.index.id) ?? undefined);
     renderer.reset();
     hud.reset(world);
     hubEl.style.display = "none";
@@ -168,6 +169,11 @@ async function main() {
     else if (mode === "paused") resume();
   };
 
+  const sentHaul = (s: Sent): Haul => {
+    const materials: Partial<Record<MaterialId, number>> = {};
+    for (const m of MATERIALS) if (s.items[m]) materials[m] = s.items[m];
+    return { money: s.money, materials, revive: s.items.revive ?? 0 };
+  };
   const finishRun = () => {
     const outcome = world.outcome === "extracted" ? "extracted" : "dead";
     const haul = (bag: Bag): Haul => {
@@ -179,7 +185,12 @@ async function main() {
       return { money: bag.money, materials, revive: bagCount(bag, "revive") };
     };
     const { gained, lost } = applyRunResult(profile, {
-      outcome, kills: world.kills, bag: haul(world.bag), secure: haul(world.secure), usedCarriedRevive: world.usedCarriedRevive,
+      outcome, kills: world.kills, bag: haul(world.bag), secure: mergeHaul(haul(world.secure), sentHaul(world.sent)), usedCarriedRevive: world.usedCarriedRevive,
+      devices: {
+        map: map.index.id,
+        carried: { ...world.carried },
+        placed: world.devices.map((d) => ({ kind: d.kind, x: d.pos.x, y: d.pos.y })),
+      },
     });
     const ex = outcome === "extracted" ? extractAt(world, world.player.pos) : null;
     lastResult = { outcome, time: world.time, kills: world.kills, gained, lost, extractAt: ex ? { ...ex.pos } : null };

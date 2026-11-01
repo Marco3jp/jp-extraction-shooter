@@ -475,3 +475,7 @@
   align-self: center;
   margin-right: 8px;
 }
+
+.hub-chip.static {
+  cursor: default;
+}

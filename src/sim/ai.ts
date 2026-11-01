@@ -48,6 +48,14 @@ export function alert(w: World, e: Actor, at: Vec, source: Actor | null, spread 
     ai.lastSeen = { ...at };
     ai.lastSeenT = w.time;
     if (source) ai.target = source.id;
+  } else if (source && source.id !== ai.target) {
+    // 見えている相手より近くから撃たれたら、撃ってきたほうへ向き直る。脱出地点に寄ってきた勢力どうしが撃ち合うように
+    const cur = w.actors.find((o) => o.id === ai.target);
+    if (!cur || !cur.alive || dist(e.pos, source.pos) < dist(e.pos, cur.pos)) {
+      ai.target = source.id;
+      ai.lastSeen = { ...source.pos };
+      ai.lastSeenT = w.time;
+    }
   }
   if (ai.state === "patrol") {
     ai.state = "engage";
@@ -247,7 +255,7 @@ export function scan(w: World, e: Actor): Actor | null {
       const a = Math.atan2(o.pos.y - e.pos.y, o.pos.x - e.pos.x);
       if (Math.abs(angleDiff(e.facing, a)) > 1.2) continue;
     }
-    const score = o.team === "player" ? d * 0.9 : d;
+    const score = ai.rival ? (o.team === "enemy" ? d * 0.6 : d) : o.team === "player" ? d * 0.9 : d;
     if (score >= bestScore) continue;
     if (!w.map.los(e.pos, o.pos)) continue;
     best = o;

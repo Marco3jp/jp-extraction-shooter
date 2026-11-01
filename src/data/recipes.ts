@@ -1,5 +1,6 @@
 import type { AttachmentId } from "./attachments";
 import type { ArmorId, BagId, BikeId, SecureBagId, ShoesId } from "./gear";
+import type { DeviceKind } from "./devices";
 import type { MaterialId } from "./items";
 import type { WeaponType } from "./weapons";
 
@@ -12,10 +13,11 @@ export type RecipeOutput =
   | { kind: "shoes"; id: ShoesId }
   | { kind: "bike"; id: BikeId }
   | { kind: "secureBag"; id: SecureBagId }
+  | { kind: "device"; id: DeviceKind }
   /** index 番目のパートナーを model の型にする。作っていなければ作る */
   | { kind: "partner"; index: number; model: 1 | 2 };
 
-export type RecipeCategory = "material" | "attachment" | "weapon" | "gear" | "partner";
+export type RecipeCategory = "material" | "attachment" | "weapon" | "gear" | "device" | "partner";
 
 export type Recipe = {
   id: string;
@@ -61,6 +63,9 @@ export const RECIPES: Recipe[] = [
   { id: "secure-medium", category: "gear", output: { kind: "secureBag", id: "medium" }, money: 4000, materials: { circuit: 6, precision: 2 } },
   { id: "secure-large", category: "gear", output: { kind: "secureBag", id: "large" }, money: 8000, materials: { circuit: 10, precision: 4 } },
   { id: "bike-road", category: "gear", output: { kind: "bike", id: "road" }, money: 3000, materials: { junk: 10, circuit: 4, precision: 2 } },
+
+  { id: "dev-sensor", category: "device", output: { kind: "device", id: "sensor" }, money: 400, materials: { junk: 4, circuit: 2 } },
+  { id: "dev-turret", category: "device", output: { kind: "device", id: "turret" }, money: 1200, materials: { junk: 12, circuit: 3 } },
 
   // 2体目は1体目を作ってから、1体目の改良は2体目を作ってから
   { id: "ptn-1", category: "partner", output: { kind: "partner", index: 0, model: 1 }, money: 1200, materials: { junk: 12, circuit: 3 } },

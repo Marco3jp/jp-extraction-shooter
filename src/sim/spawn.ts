@@ -7,7 +7,7 @@ import {
 import type { Stack } from "./inventory";
 import { CHUNK, Ground, Solid, chunkKey, type LoadedChunk, type Vec } from "./map";
 import { Rng } from "./rng";
-import { enemyWeapon, makeActor, pickWeighted, rollStack, type Loot, type World } from "./world";
+import { enemyWeapon, makeActor, pickWeighted, rollStack, type Actor, type Loot, type World } from "./world";
 
 /** 区画と、その区画の中で置いた順番 */
 export type SpawnRef = { chunk: string; n: number };
@@ -33,6 +33,31 @@ function chunkSeed(seed: number, i: number, j: number) {
 }
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** 敵を1人作る。w.actors には入れない */
+export function makeEnemy(w: World, rng: Rng, kind: EnemyKind, faction: number, pos: Vec, group: number, roam: boolean): Actor {
+  const e = makeActor(w.nextId++, "enemy", kind, faction, pos, [enemyWeapon(kind)], ENEMY_SHIELD);
+  e.facing = rng.range(-Math.PI, Math.PI);
+  e.ai = {
+    state: "patrol", group, home: { ...pos },
+    path: [], pathTarget: null, repathT: 0,
+    target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: rng.next() * 0.2, reactT: 0,
+    strafe: 1, strafeT: 0, stateT: 0, waitT: rng.range(0, 3),
+    heals: 2,
+    roam,
+    burstT: 0, burstLen: 0.8, restT: 0,
+  };
+  const ammo = e.weapons[0].def.ammo;
+  e.carry.push({ item: ammo, count: 30 + rng.int(4) * 10 });
+  if (rng.chance(0.75)) e.carry.push({ item: "cell", count: 1 + rng.int(3) });
+  if (rng.chance(0.5)) e.carry.push({ item: "medSmall", count: 1 + rng.int(2) });
+  if (rng.chance(0.15)) e.carry.push({ item: "medLarge", count: 1 });
+  if (rng.chance(0.5)) e.carry.push({ item: "junk", count: 2 + rng.int(4) });
+  if (rng.chance(0.25)) e.carry.push({ item: "circuit", count: 1 + rng.int(2) });
+  if (rng.chance(0.06)) e.carry.push({ item: "precision", count: 1 });
+  e.carry.push({ item: "money", count: (10 + rng.int(60)) * 10 });
+  return e;
+}
 
 function populate(w: World, c: LoadedChunk) {
   const key = chunkKey(c.i, c.j);
@@ -70,27 +95,8 @@ function populate(w: World, c: LoadedChunk) {
   let n = 0;
 
   const spawnEnemy = (kind: EnemyKind, faction: number, pos: Vec, group: number, roam: boolean) => {
-    const e = makeActor(w.nextId++, "enemy", kind, faction, pos, [enemyWeapon(kind)], ENEMY_SHIELD);
+    const e = makeEnemy(w, rng, kind, faction, pos, group, roam);
     e.spawn = { chunk: key, n: n++ };
-    e.facing = rng.range(-Math.PI, Math.PI);
-    e.ai = {
-      state: "patrol", group, home: { ...pos },
-      path: [], pathTarget: null, repathT: 0,
-      target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: rng.next() * 0.2, reactT: 0,
-      strafe: 1, strafeT: 0, stateT: 0, waitT: rng.range(0, 3),
-      heals: 2,
-      roam,
-      burstT: 0, burstLen: 0.8, restT: 0,
-    };
-    const ammo = e.weapons[0].def.ammo;
-    e.carry.push({ item: ammo, count: 30 + rng.int(4) * 10 });
-    if (rng.chance(0.75)) e.carry.push({ item: "cell", count: 1 + rng.int(3) });
-    if (rng.chance(0.5)) e.carry.push({ item: "medSmall", count: 1 + rng.int(2) });
-    if (rng.chance(0.15)) e.carry.push({ item: "medLarge", count: 1 });
-    if (rng.chance(0.5)) e.carry.push({ item: "junk", count: 2 + rng.int(4) });
-    if (rng.chance(0.25)) e.carry.push({ item: "circuit", count: 1 + rng.int(2) });
-    if (rng.chance(0.06)) e.carry.push({ item: "precision", count: 1 });
-    e.carry.push({ item: "money", count: (10 + rng.int(60)) * 10 });
     // 倒した敵も同じだけ乱数を使ってから外す。後に置くものの中身を変えないため
     if (!mem?.dead.has(e.spawn.n)) w.actors.push(e);
   };

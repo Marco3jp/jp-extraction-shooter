@@ -1,4 +1,4 @@
-import { BEACON_RADIUS, EVAC, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
+import { BEACON_RADIUS, DEVICE_ACTIVE_RANGE, DEVICES, EVAC, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
 import type { GameMap, Vec } from "./sim/map";
 import type { Actor, Extract, World } from "./sim/world";
 import { PARTNER_COLOR, TYPE_COLORS, extractColor } from "./render/renderer";
@@ -221,6 +221,33 @@ export class MapView {
       ctx.arc(s.x, s.y, mini ? 3.5 : 4, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+    }
+
+    // 設置物。センサーは見える範囲の円も出す。止まっている物は色を落とす
+    for (const dv of w.devices) {
+      const s = toS(dv.pos);
+      const on = Math.hypot(dv.pos.x - p.pos.x, dv.pos.y - p.pos.y) <= DEVICE_ACTIVE_RANGE;
+      if (dv.kind === "sensor") {
+        ctx.strokeStyle = on ? "rgba(120, 220, 255, 0.35)" : "rgba(120, 140, 150, 0.25)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, DEVICES.sensor.radius * scale, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = on ? "#78dcff" : "#5a6a74";
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - 4);
+        ctx.lineTo(s.x + 4, s.y);
+        ctx.lineTo(s.x, s.y + 4);
+        ctx.lineTo(s.x - 4, s.y);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.fillStyle = on ? hex(TYPE_COLORS.turret) : "#5a6a74";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.fillRect(s.x - 3.5, s.y - 3.5, 7, 7);
+        ctx.strokeRect(s.x - 3.5, s.y - 3.5, 7, 7);
+      }
     }
 
     // ミニマップには近い3か所だけ出し、外れていれば縁に寄せる。呼んでいる所は遠くても出す

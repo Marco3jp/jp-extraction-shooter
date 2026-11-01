@@ -38,6 +38,27 @@ export class Sfx {
     src.stop(t + dur);
   }
 
+  /** 風切り音。ゆっくり立ち上がり、ローパスの高さを from から to へ下げる。銃声と聞き分けられるよう、立ち上がりを鈍くしている */
+  private whoosh(dur: number, from: number, to: number, gain: number) {
+    const ctx = this.ctx, m = this.master;
+    if (!ctx || !m || !this.noise) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.Q.value = 2.5;
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    f.frequency.setValueAtTime(from, t);
+    f.frequency.exponentialRampToValueAtTime(to, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(gain, t + dur * 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(m);
+    src.start(t);
+    src.stop(t + dur);
+  }
+
   private tone(freqs: number[], step: number, gain: number, type: OscillatorType = "sine") {
     const ctx = this.ctx, m = this.master;
     if (!ctx || !m) return;
@@ -131,7 +152,13 @@ export class Sfx {
           if (ev.actor === p.id) this.burst(0.12, 600, 0.2, 1.5);
           break;
         case "dash":
-          if (ev.actor === p.id) this.burst(0.18, 1800, 0.25, 0.8);
+          if (ev.actor !== p.id) break;
+          if (ev.pad) {
+            this.whoosh(0.5, 1400, 260, 0.22);
+            this.tone([220, 330], 0.06, 0.05, "triangle");
+          } else {
+            this.whoosh(0.26, 2200, 500, 0.16);
+          }
           break;
         case "pickup":
           this.tone([700, 1050], 0.05, 0.1);
@@ -144,6 +171,9 @@ export class Sfx {
           break;
         case "extractCall":
           this.tone([520, 780, 520, 780], 0.12, 0.2, "square");
+          break;
+        case "devicePlaced":
+          this.tone([880, 660, 990], 0.05, 0.12, "triangle");
           break;
         case "extractReady":
           this.tone([660, 990, 1320], 0.1, 0.18, "triangle");

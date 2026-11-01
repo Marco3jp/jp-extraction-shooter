@@ -20,12 +20,29 @@ export const BEACON_RADIUS = 22;
 export const EXTRACT_RADIUS = 4;
 /** 迎えが来てから、中に何秒いれば脱出できるか */
 export const EXTRACT_TIME = 2;
-/** 脱出地点で E を押して呼んでから、迎えが来るまで（仮） */
-export const EXTRACT_CALL_TIME = 20;
+/** 脱出地点で E を押して呼んでから、迎えが来るまで。この間は防衛になる（仮） */
+export const EXTRACT_CALL_TIME = 45;
+/**
+ * 迎えを待つ間の防衛。数値は仮
+ * - 脱出地点の円の中にいる間だけ、カバンのお金・素材・蘇生アイテムを secureShare まで少しずつ送る。送った分は死んでも持ち帰れる
+ * - 呼んだ時から waves 秒後に、wave の距離から敵のグループを1つずつ寄せる。勢力は交互にして、着いた勢力どうしも撃ち合わせる
+ * - 寄ってくる敵は、脱出地点から rally m の、来た側の所を目指す
+ * - 脱出地点の周りに壁を立てる。inner は円のすぐ外、outer は寄ってくる敵が使う遮蔽
+ */
+export const EXTRACT_DEFENSE = {
+  secureShare: 0.6,
+  waves: [0, 8, 16],
+  wave: [50, 70] as [number, number],
+  rally: 16,
+  inner: { count: 4, radius: 7, length: 4, hp: 600 },
+  outer: { count: 7, radius: [13, 22] as [number, number], length: 3, hp: 400 },
+  /** 迎えが来てから壁が消えるまで */
+  wallLinger: 30,
+};
 /** 呼んだ音が届いて、敵が寄ってくる距離（仮） */
 export const EXTRACT_CALL_HEAR = 60;
 /** 脱出した地点から、キャンプを置ける距離（仮） */
-export const CAMP_RADIUS = 150;
+export const CAMP_RADIUS = 250;
 export const PICKUP_RANGE = 2.2;
 /** 開いた箱から離れたら閉じる距離 */
 export const LOOT_PANEL_RANGE = 3.2;

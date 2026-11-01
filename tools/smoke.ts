@@ -7,13 +7,13 @@ import { format } from "node:util";
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
 import {
-  BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, EVAC, FIXED_RAIL, HEALS, SELF_REVIVE, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
+  BARRIER, BIKES, BIN_ITEMS, BUFF_IDS, DEVICE_ACTIVE_RANGE, DEVICES, EVAC, EXTRACT_CALL_TIME, EXTRACT_DEFENSE, EXTRACT_RADIUS, FIXED_RAIL, HEALS, SELF_REVIVE, PARTNER_CATCH_UP, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
 } from "../src/sim/data";
 import { buffsOf } from "../src/sim/buffs";
 import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
-import { bagAdd, bagCount, bagUsed } from "../src/sim/inventory";
+import { bagAdd, bagCount, bagRemove, bagUsed } from "../src/sim/inventory";
 import { CHUNK, GameMap, decodeChunk, type ChunkJson, type LoadedChunk, type MapIndex } from "../src/sim/map";
 import { ChunkStreamer, STREAM_RANGE, type StreamRange } from "../src/stream";
 import { Rng } from "../src/sim/rng";
@@ -949,10 +949,11 @@ section("強化パーツ", () => {
 }
 
 section("固定レール・ダッシュパッド・自転車", () => {
-  // E は拾うのがレールに乗るより先なので、乗り場の近くに落ちている物も片付ける
+  // E は拾うのがレールに乗るより先なので、乗り場の近くに落ちている物も片付ける。固定レールの維持費の金属くずを持たせる
   const quiet = (w: World) => {
     for (const a of w.actors) if (a.team === "enemy") a.alive = false;
     w.loot = [];
+    bagAdd(w.bag, "junk", 30);
   };
   const near = (a: Vec, b: Vec, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
 
@@ -992,8 +993,14 @@ section("固定レール・ダッシュパッド・自転車", () => {
     const r = rails.reduce((a, b) => (Math.hypot(a.b.x - a.a.x, a.b.y - a.a.y) > Math.hypot(b.b.x - b.a.x, b.b.y - b.a.y) ? a : b));
     const len = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
     p.pos = { x: r.a.x, y: r.a.y };
+    const junk = bagCount(w.bag, "junk");
+    bagRemove(w.bag, "junk", junk);
+    step(w, { ...emptyInput(), interact: true, aim: { ...r.b } });
+    const boardedBroke = !!p.ride;
+    bagAdd(w.bag, "junk", junk);
     step(w, { ...emptyInput(), interact: true, aim: { ...r.b } });
     const boarded = p.ride?.rail === r.id;
+    const paid = junk - bagCount(w.bag, "junk");
     const t0 = w.time;
     let shots = 0;
     for (let i = 0; i < 30 * 30 && p.ride; i++) {
@@ -1002,7 +1009,7 @@ section("固定レール・ダッシュパッド・自転車", () => {
     }
     const t = w.time - t0;
     console.log(
-      `固定レールに乗る: 乗れた ${boarded}、${len.toFixed(0)}m を ${t.toFixed(2)}秒（秒速 ${(len / t).toFixed(1)}m・決めた値 ${FIXED_RAIL.speed}m）、降りた所と端のずれ ${Math.hypot(p.pos.x - r.b.x, p.pos.y - r.b.y).toFixed(2)}m、乗っている間に撃った ${shots}発`,
+      `固定レールに乗る: 金属くずが無いと乗れた ${boardedBroke}、乗れた ${boarded}・払った金属くず ${paid}個（決めた値 ${FIXED_RAIL.fare}）、${len.toFixed(0)}m を ${t.toFixed(2)}秒（秒速 ${(len / t).toFixed(1)}m・決めた値 ${FIXED_RAIL.speed}m）、降りた所と端のずれ ${Math.hypot(p.pos.x - r.b.x, p.pos.y - r.b.y).toFixed(2)}m、乗っている間に撃った ${shots}発`,
     );
   }
 
@@ -1386,6 +1393,154 @@ section("ラン中に使うアイテム", () => {
       + `${d.toFixed(0)}m を ${(w.time - t0).toFixed(1)}秒で飛んだ（降りた所のずれ ${Math.hypot(p.pos.x - goal.pos.x, p.pos.y - goal.pos.y).toFixed(2)}m）、飛んでいる間に撃った ${shot}発・撃たれたシールド ${p.shield}/${p.shieldMax}、残り ${bagCount(w.bag, "evac")}個`,
     );
   }
+});
+
+section("脱出の防衛", () => {
+  const D = EXTRACT_DEFENSE;
+  for (const seed of [1, 2, 3]) {
+    const w = createWorld(map, seed, baseLoadout);
+    const p = w.player;
+    const ex = w.extracts.reduce((a, b) => (Math.hypot(a.pos.x - p.pos.x, a.pos.y - p.pos.y) < Math.hypot(b.pos.x - p.pos.x, b.pos.y - p.pos.y) ? a : b));
+    w.loot = w.loot.filter((l) => Math.hypot(l.pos.x - ex.pos.x, l.pos.y - ex.pos.y) > 4);
+    p.pos = { ...ex.pos };
+    bagAdd(w.bag, "junk", 10);
+    bagAdd(w.bag, "circuit", 5);
+    w.bag.money += 1000;
+    const before = { junk: bagCount(w.bag, "junk"), circuit: bagCount(w.bag, "circuit"), money: w.bag.money };
+    step(w, { ...emptyInput(), interact: true, aim: { x: p.pos.x + 1, y: p.pos.y } });
+    const walls = w.barriers.filter((b) => b.owner === -1).length;
+    const known = new Set(w.actors.map((a) => a.id));
+    // 死なないようにして、迎えが来るまで円の中に立つ。途中の 8 秒は円の外に出る
+    let infight = 0, byPlayerSide = 0, shareOut = 0, shareIn = 0, waveDmg = 0, dmgToPlayer = 0;
+    for (let i = 0; i < Math.round((EXTRACT_CALL_TIME + 0.5) / DT); i++) {
+      p.invulnT = 1;
+      const t = i * DT;
+      const out = t >= 20 && t < 28;
+      if (i === Math.round(20 / DT)) shareOut = w.defense!.share;
+      if (i === Math.round(28 / DT)) shareIn = w.defense!.share;
+      p.pos = out ? { x: ex.pos.x + EXTRACT_RADIUS + 2, y: ex.pos.y } : { ...ex.pos };
+      step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+      const byId = new Map(w.actors.map((a) => [a.id, a]));
+      for (const ev of w.events) {
+        if (ev.type === "hit") {
+          const v = byId.get(ev.actor), k = byId.get(ev.by);
+          if (v && k && !known.has(v.id) && !known.has(k.id)) waveDmg += ev.amount;
+          if (v === p && k) dmgToPlayer += ev.amount;
+        }
+        if (ev.type !== "death") continue;
+        const v = byId.get(ev.actor), k = byId.get(ev.by);
+        if (Math.hypot(ev.pos.x - ex.pos.x, ev.pos.y - ex.pos.y) > 50) continue;
+        if (v?.team === "enemy" && k?.team === "enemy") infight++;
+        else if (v?.team === "enemy") byPlayerSide++;
+      }
+    }
+    const waves = w.actors.filter((a) => !known.has(a.id) && a.team === "enemy");
+    const factions = [...new Set(waves.map((a) => a.faction))].join("・");
+    const sent = w.sent;
+    console.log(
+      `脱出の防衛 seed=${seed}: 壁 ${walls}枚、寄せた敵 ${waves.length}人（勢力 ${factions}）・迎えが来た時に生きている ${waves.filter((a) => a.alive).length}人、`
+        + `脱出地点の 50m 内で 敵どうしで倒れた ${infight}人・それ以外で倒れた ${byPlayerSide}人、寄せた敵どうしのダメージ ${waveDmg}・プレイヤーが受けたダメージ ${dmgToPlayer}、寄せた敵と脱出地点の距離 ${waves.filter((a) => a.alive).map((a) => Math.round(Math.hypot(a.pos.x - ex.pos.x, a.pos.y - ex.pos.y))).join("・")}m、迎えが来た ${ex.ready}、送った割合 ${(w.defense!.share * 100).toFixed(0)}%（上限 ${D.secureShare * 100}%）・円の外の8秒で増えた ${((shareIn - shareOut) * 100).toFixed(1)}%、`
+        + `送った物 お金 ${sent.money}/${before.money}・金属くず ${sent.items.junk ?? 0}/${before.junk}・電子部品 ${sent.items.circuit ?? 0}/${before.circuit}`,
+    );
+  }
+});
+
+section("設置物", () => {
+  const prof = defaultProfile();
+  prof.devices = { sensor: 5, turret: 3 };
+  const w = createWorld(map, 4, makeRunLoadout(prof, map.index.id));
+  const p = w.player;
+  for (const a of w.actors) if (a.team === "enemy") a.alive = false;
+  w.loot = [];
+  const placeAt = (kind: "sensor" | "turret", pos: Vec) => {
+    p.pos = { ...pos };
+    step(w, { ...emptyInput(), place: kind, aim: { x: p.pos.x + 1, y: p.pos.y } });
+  };
+  const start = { ...p.pos };
+  for (let i = 0; i < 5; i++) placeAt("sensor", { x: start.x + i * 3, y: start.y });
+  const sensors = w.devices.filter((d) => d.kind === "sensor").length;
+  // 壁の向こうの敵が、センサーの範囲で型まで見えるか
+  const s0 = w.devices.find((d) => d.kind === "sensor")!;
+  const enemy = w.actors.find((a) => a.team === "enemy")!;
+  enemy.alive = true;
+  let hidden: Vec | null = null;
+  for (let r = 6; r < DEVICES.sensor.radius && !hidden; r += 1) {
+    for (let k = 0; k < 32 && !hidden; k++) {
+      const q = { x: s0.pos.x + Math.cos(k / 5) * r, y: s0.pos.y + Math.sin(k / 5) * r };
+      if (w.map.walkable(q.x, q.y) && !w.map.los(start, q) && Math.hypot(q.x - start.x, q.y - start.y) > 24) hidden = q;
+    }
+  }
+  p.pos = { ...start };
+  if (hidden) enemy.pos = { ...hidden };
+  enemy.ai!.state = "patrol";
+  step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+  const sensed = enemy.info;
+  enemy.alive = false;
+
+  // タレット：視線の通る 15m 先に敵を立たせる
+  let tpos = start;
+  for (let k = 0; k < 64; k++) {
+    const q = { x: start.x + Math.cos(k / 10) * 4, y: start.y + Math.sin(k / 10) * 4 };
+    if (w.map.walkable(q.x, q.y) && w.devices.every((d) => Math.hypot(d.pos.x - q.x, d.pos.y - q.y) > 2)) {
+      tpos = q;
+      break;
+    }
+  }
+  placeAt("turret", tpos);
+  const t = w.actors.find((a) => a.team === "device")!;
+  let spot: Vec | null = null;
+  for (let k = 0; k < 64 && !spot; k++) {
+    const q = { x: t.pos.x + Math.cos(k / 10) * 15, y: t.pos.y + Math.sin(k / 10) * 15 };
+    if (w.map.walkable(q.x, q.y) && w.map.los(t.pos, q)) spot = q;
+  }
+  const target = w.actors.filter((a) => a.team === "enemy")[1];
+  target.alive = true;
+  target.health = 100;
+  target.shield = 100;
+  target.pos = { ...spot! };
+  target.ai!.state = "patrol";
+  let turretShots = 0, turretHits = 0;
+  const t0 = w.time;
+  for (let i = 0; i < 30 * 15 && target.alive; i++) {
+    p.invulnT = 1;
+    step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+    turretShots += w.events.filter((e) => e.type === "shot" && e.actor === t.id).length;
+    turretHits += w.events.filter((e) => e.type === "hit" && e.by === t.id).length;
+  }
+  const killT = w.time - t0;
+  const duel = `命中 ${turretHits}発、敵の残り ${Math.round(target.shield + target.health)}・タレットの残り ${Math.round(t.health)}/${DEVICES.turret.health}`;
+
+  // 遠くでは止まる
+  p.pos = { x: t.pos.x + DEVICE_ACTIVE_RANGE + 20, y: t.pos.y };
+  const far = { x: t.pos.x + 10, y: t.pos.y };
+  const enemy2 = w.actors.filter((a) => a.team === "enemy")[2];
+  enemy2.alive = true;
+  enemy2.pos = far;
+  let farShots = 0;
+  for (let i = 0; i < 30 * 3; i++) {
+    step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
+    farShots += w.events.filter((e) => e.type === "shot" && e.actor === t.id).length;
+  }
+  enemy2.alive = false;
+
+  // ランを終えて、次のランに引き継ぐ
+  applyRunResult(prof, {
+    outcome: "dead", kills: 0, bag: { money: 0, materials: {}, revive: 0 }, secure: { money: 0, materials: {}, revive: 0 }, usedCarriedRevive: false,
+    devices: { map: map.index.id, carried: { ...w.carried }, placed: w.devices.map((d) => ({ kind: d.kind, x: d.pos.x, y: d.pos.y })) },
+  });
+  const w2 = createWorld(map, 5, makeRunLoadout(prof, map.index.id));
+  const turrets2 = w2.actors.filter((a) => a.team === "device").length;
+  const devices2 = w2.devices.length;
+  // 壊されたら消える
+  const t2 = w2.actors.find((a) => a.team === "device")!;
+  applyDamage(w2, t2, 10000, undefined, t2.pos);
+  step(w2, { ...emptyInput(), aim: { x: w2.player.pos.x + 1, y: w2.player.pos.y } });
+  console.log(
+    `設置物: センサーを5回置いて置けた ${sensors}個（上限 ${DEVICES.sensor.max}）、手持ち センサー ${w.carried.sensor}・タレット ${w.carried.turret}、`
+      + `壁の向こうの敵の段階 ${hidden ? sensed : "置き場所なし"}（センサーは ${DEVICES.sensor.level}）、`
+      + `タレットが 15m 先の敵を倒すまで ${target.alive ? "倒せない" : `${killT.toFixed(1)}秒`}・${turretShots}発（${duel}）、${DEVICE_ACTIVE_RANGE}m より離れたときに撃った ${farShots}発、`
+      + `保管庫 手持ち ${prof.devices.sensor}・${prof.devices.turret} 置いている ${prof.placed.length}個、次のランの設置物 ${devices2}個（タレット ${turrets2}）、壊した後 ${w2.devices.length}個・結果 ${w2.outcome}`,
+  );
 });
 
 type Done = { k: number; out: string; error?: string; ms: number };

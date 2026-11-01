@@ -2,6 +2,7 @@ import {
   ENEMY, ENEMY_BULLET_SPEED_MUL, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
   type ActorStats, type BuffId, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
   type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
+  DEVICES, type DeviceKind,
 } from "./data";
 import type { RunLoadout } from "../meta/profile";
 import { computeWeapon } from "./stats";
@@ -39,6 +40,8 @@ export type Ai = {
   heals: number;
   /** 巡回の中心を、ときどき遠くへ移す（漁りに出かける） */
   roam: boolean;
+  /** 脱出地点に寄せた敵。プレイヤーよりほかの勢力の敵を先に狙う */
+  rival?: boolean;
   /** 連射を続けている時間。burstLen を超えたら restT だけ撃つのをやめる */
   burstT: number;
   burstLen: number;
@@ -81,8 +84,9 @@ export type Kit = KitChoice & { skillCd: number; skillT: number; ultCd: number; 
 
 export type Actor = {
   id: number;
-  team: "player" | "enemy" | "partner";
-  kind: "player" | "partner" | EnemyKind;
+  /** device はタレット。動かず、ai も持たない */
+  team: "player" | "enemy" | "partner" | "device";
+  kind: "player" | "partner" | "turret" | EnemyKind;
   /** 違う勢力どうしは撃ち合う。プレイヤーは 0、単独の敵は1人ずつ別の番号 */
   faction: number;
   pos: Vec;
@@ -238,7 +242,7 @@ export type GameEvent =
   | { type: "throw"; actor: number; pos: Vec; kind: ThrowableId }
   | { type: "explosion"; pos: Vec; radius: number }
   | { type: "fireStart"; a: Vec; b: Vec }
-  | { type: "dash"; actor: number; pos: Vec; dir: Vec }
+  | { type: "dash"; actor: number; pos: Vec; dir: Vec; pad?: boolean }
   | { type: "extractCall"; pos: Vec }
   | { type: "extractReady"; pos: Vec }
   | { type: "skill"; actor: number; pos: Vec; id: SkillId | UltId }
@@ -248,7 +252,8 @@ export type GameEvent =
   | { type: "selfRevive"; actor: number; pos: Vec }
   | { type: "evacPick" }
   | { type: "evacLaunch"; actor: number; pos: Vec; to: Vec }
-  | { type: "evacLand"; actor: number; pos: Vec };
+  | { type: "evacLand"; actor: number; pos: Vec }
+  | { type: "devicePlaced"; kind: DeviceKind; pos: Vec };
 
 export type Outcome = "playing" | "dead" | "extracted";
 
@@ -259,6 +264,24 @@ export type Extract = {
   readyAt: number | null;
   ready: boolean;
   progress: number;
+};
+
+/** 置いた設置物。タレットは actor にタレットの人の番号を持つ */
+export type Device = { id: number; kind: DeviceKind; pos: Vec; actor: number | null; scanT: number; target: number | null };
+
+/** 防衛の間に送ったお金・素材・蘇生アイテム。死んでも持ち帰れる */
+export type Sent = { money: number; items: Partial<Record<ItemId, number>> };
+
+/** 迎えを呼んでから来るまでの防衛 */
+export type Defense = {
+  extract: Extract;
+  /** カバンの中身のうち、送り終えた割合（0〜EXTRACT_DEFENSE.secureShare） */
+  share: number;
+  /** 寄せる敵のグループ。at は呼んだ時からの秒数 */
+  waves: { at: number; faction: number; angle: number; done: boolean }[];
+  /** 寄せた敵と、その敵が目指す所 */
+  rally: Map<number, Vec>;
+  startedAt: number;
 };
 
 export type World = {
@@ -286,6 +309,11 @@ export type World = {
   carriedRevive: number;
   usedCarriedRevive: boolean;
   extracts: Extract[];
+  defense: Defense | null;
+  sent: Sent;
+  devices: Device[];
+  /** 持っていて、まだ置いていない設置物 */
+  carried: Record<DeviceKind, number>;
   events: GameEvent[];
   outcome: Outcome;
   kills: number;
@@ -470,6 +498,10 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     bullets: [], grenades: [], fires: [], barriers: [], rails: [], pads: [], healMarks: [], loot: [], lootVersion: 1, bag,
     secure: makeBag(loadout.secureSlots), carriedRevive: loadout.revive, usedCarriedRevive: false,
     extracts,
+    defense: null,
+    sent: { money: 0, items: {} },
+    devices: [],
+    carried: { ...loadout.devices.carried },
     events: [],
     outcome: "playing",
     kills: 0,
@@ -497,5 +529,24 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     if (loadout.bike) partner.bike = { ...loadout.bike, state: "off", t: 0 };
     w.actors.push(partner);
   }
+  // パートナーと同じく、敵と箱を置いた後に出す
+  for (const d of loadout.devices.placed) addDevice(w, d.kind, { x: d.x, y: d.y });
   return w;
+}
+
+let turretWeapon: WeaponDef | null = null;
+
+/** 設置物を置く。数の上限や持っている数は見ない */
+export function addDevice(w: World, kind: DeviceKind, pos: Vec): Device {
+  const d: Device = { id: w.nextId++, kind, pos: { ...pos }, actor: null, scanT: 0, target: null };
+  if (kind === "turret") {
+    turretWeapon ??= computeWeapon("ar", [], [], ENEMY_MIN_TTK);
+    const t = makeActor(w.nextId++, "device", "turret", PLAYER_FACTION, pos, [turretWeapon], 0);
+    t.health = DEVICES.turret.health;
+    t.radius = 0.5;
+    w.actors.push(t);
+    d.actor = t.id;
+  }
+  w.devices.push(d);
+  return d;
 }

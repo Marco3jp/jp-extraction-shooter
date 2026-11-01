@@ -12,3 +12,4 @@ export * from "../data/skills";
 export * from "../data/buffs";
 export * from "../data/partners";
 export * from "../data/travel";
+export * from "../data/devices";

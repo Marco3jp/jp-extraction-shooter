@@ -1,9 +1,10 @@
 import { evacHeight } from "../sim/evac";
 import * as THREE from "three";
 import {
-  BEACON_RADIUS, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
+  BEACON_RADIUS, DEVICES, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
 } from "../sim/data";
 import { weapon, isMoving } from "../sim/combat";
+import { deviceActive } from "../sim/devices";
 import { CHUNK, Solid, chunkKey, type GameMap, type LoadedChunk, type Vec } from "../sim/map";
 import { MeshBuilder, addBuilding, buildRoadText, buildSigns, disposeChunk, hash, makeGroundTile, paintGround, type GroundTile } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
@@ -26,7 +27,7 @@ export function extractColor(e: Extract): number {
   return e.ready ? EXTRACT_COLORS.ready : e.readyAt !== null ? EXTRACT_COLORS.called : EXTRACT_COLORS.idle;
 }
 
-export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff, partner: 0x9ae8ff };
+export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff, partner: 0x9ae8ff, turret: 0x4fb0ff };
 /** パートナーの体の色。プレイヤー（勢力0の色）に寄せて、少し明るくする */
 export const PARTNER_COLOR = 0x8fd8ff;
 /** 固定レールと、その端（乗り場）。tools/osm_to_map.py の OVERVIEW_RAIL と揃える */
@@ -184,6 +185,8 @@ type ActorView = {
   bodyMat: THREE.MeshLambertMaterial;
   ghost: THREE.Mesh;
   ghostMat: THREE.MeshBasicMaterial;
+  /** 建物などの裏に隠れた所だけに出る輪郭 */
+  behind: THREE.Mesh;
   typeRing: THREE.Mesh;
   typeRingMat: THREE.MeshBasicMaterial;
   healRing: THREE.Mesh;
@@ -213,6 +216,7 @@ export class Renderer {
   private camInit = false;
   private buildingMat: THREE.ShaderMaterial;
   private actorViews = new Map<number, ActorView>();
+  private sensorViews = new Map<number, { group: THREE.Group; ring: THREE.Mesh; lamp: THREE.Mesh }>();
   private actorsSeen: Actor[] | null = null;
   private bullets: THREE.InstancedMesh;
   private particles: Particle[] = [];
@@ -742,17 +746,62 @@ export class Renderer {
     };
   }
 
+  /** センサーは柱と光る玉。動いている間は見える範囲の円を地面に出す */
+  private drawSensors(w: World) {
+    const ids = new Set<number>();
+    for (const d of w.devices) {
+      if (d.kind !== "sensor") continue;
+      ids.add(d.id);
+      let v = this.sensorViews.get(d.id);
+      if (!v) {
+        const group = new THREE.Group();
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 1.3, 6), new THREE.MeshLambertMaterial({ color: 0x5a6670 }));
+        pole.position.y = 0.65;
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), new THREE.MeshBasicMaterial({ color: 0x78dcff }));
+        lamp.position.y = 1.4;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(DEVICES.sensor.radius - 0.25, DEVICES.sensor.radius, 96),
+          new THREE.MeshBasicMaterial({ color: 0x78dcff, transparent: true, opacity: 0.22, depthWrite: false }),
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.05;
+        group.add(pole, lamp, ring);
+        group.position.set(d.pos.x, 0, d.pos.y);
+        this.scene.add(group);
+        v = { group, ring, lamp };
+        this.sensorViews.set(d.id, v);
+      }
+      const on = deviceActive(w, d);
+      v.ring.visible = on;
+      (v.lamp.material as THREE.MeshBasicMaterial).color.setHex(on ? 0x78dcff : 0x50606a);
+      v.lamp.scale.setScalar(on ? 1 + Math.sin(this.time * 4 + d.id) * 0.15 : 1);
+    }
+    for (const [id, v] of this.sensorViews) {
+      if (ids.has(id)) continue;
+      this.scene.remove(v.group);
+      this.sensorViews.delete(id);
+    }
+  }
+
   private makeActorView(a: Actor): ActorView {
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshLambertMaterial({ color: a.team === "partner" ? PARTNER_COLOR : factionDef(a.faction).color });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.42, 1.55, 16), bodyMat);
+    const turret = a.kind === "turret";
+    const bodyMat = new THREE.MeshLambertMaterial({ color: turret ? TYPE_COLORS.turret : a.team === "partner" ? PARTNER_COLOR : factionDef(a.faction).color });
+    // タレットは、台の上で回る箱。body を回すと銃身が向く
+    const body = new THREE.Mesh(turret ? new THREE.BoxGeometry(0.8, 0.45, 0.7) : new THREE.CylinderGeometry(0.36, 0.42, 1.55, 16), bodyMat);
     body.position.y = 0.78;
     group.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 8), bodyMat);
-    head.position.y = 0.97;
-    body.add(head);
+    if (turret) {
+      const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.45, 0.6, 10), new THREE.MeshLambertMaterial({ color: 0x3a4450 }));
+      stand.position.y = 0.3;
+      group.add(stand);
+    } else {
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 8), bodyMat);
+      head.position.y = 0.97;
+      body.add(head);
+    }
     const gun = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.14, 0.14), new THREE.MeshLambertMaterial({ color: 0x222222 }));
-    gun.position.set(0.55, 0.25, 0);
+    gun.position.set(0.55, turret ? 0.05 : 0.25, 0);
     body.add(gun);
 
     const ghostMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false });
@@ -760,6 +809,19 @@ export class Renderer {
     ghost.position.y = 0.9;
     ghost.renderOrder = 20;
     group.add(ghost);
+
+    // 体より一回り大きくして、自分の体の裏には出ないようにする
+    const behind = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.46, 0.52, 1.7, 12),
+      new THREE.MeshBasicMaterial({
+        color: turret ? TYPE_COLORS.turret : a.team === "partner" ? PARTNER_COLOR : factionDef(a.faction).color,
+        transparent: true, opacity: 0.75, depthWrite: false, depthFunc: THREE.GreaterDepth,
+      }),
+    );
+    // 地面や路面の表示に下の端が隠れて、ちらつかないよう少し浮かせる
+    behind.position.y = 0.95;
+    behind.renderOrder = 18;
+    group.add(behind);
 
     const typeRingMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false });
     const typeRing = new THREE.Mesh(new THREE.RingGeometry(0.75, 0.95, 32), typeRingMat);
@@ -786,7 +848,7 @@ export class Renderer {
     this.scene.add(group);
     const bike = a.bike ? makeBike() : null;
     if (bike) group.add(bike);
-    return { group, body, bodyMat, ghost, ghostMat, typeRing, typeRingMat, healRing, healMat, reloadArc, bike, bikeHeading: a.facing };
+    return { group, body, bodyMat, ghost, ghostMat, behind, typeRing, typeRingMat, healRing, healMat, reloadArc, bike, bikeHeading: a.facing };
   }
 
   private spawnParticles(at: Vec, y: number, n: number, color: number, speed: number, size = 0.12, life = 0.5) {
@@ -808,7 +870,7 @@ export class Renderer {
     const byId = new Map(w.actors.map((a) => [a.id, a]));
     const visible = (id: number) => {
       const t = byId.get(id);
-      return !t || t.team === "player" || t.seen || t.info >= 1;
+      return !t || t.team !== "enemy" || t.seen || t.info >= 1;
     };
     for (const ev of events) {
       switch (ev.type) {
@@ -1025,6 +1087,7 @@ export class Renderer {
       v.group.position.set(ax, evacHeight(a), ay);
       v.body.rotation.y = -a.facing;
       v.body.visible = isPlayer || a.seen;
+      v.behind.visible = a.alive && v.body.visible;
       v.body.rotation.z = a.alive ? 0 : Math.PI / 2;
       v.body.position.y = a.alive ? 0.78 : 0.4;
       if (v.bike) {
@@ -1131,6 +1194,7 @@ export class Renderer {
     sp.needsUpdate = true;
     this.spreadLines.visible = p.alive && !p.sprinting;
 
+    this.drawSensors(w);
     this.beaconRing.position.set(px, 0.06, py);
     this.beaconRing.visible = w.debug.beaconLevel > 0;
     this.drawExtracts(w);
