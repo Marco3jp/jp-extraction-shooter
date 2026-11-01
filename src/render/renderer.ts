@@ -110,6 +110,12 @@ const MONEY_COLOR = 0xffc030;
 const BIN = { w: 1.1, h: 0.72, d: 0.7, lidH: 0.16 };
 const DEATHBOX = { w: 0.9, h: 0.5, d: 0.9 };
 const LID_OPEN_ANGLE = 1.95;
+/**
+ * 箱と落ちている物を描く、プレイヤーからの距離（m）。画面に映るのは 70m × 60m ほど。
+ * 描き直すのは LOOT_REDRAW_MOVE 動くごとなので、描く範囲は画面の端より LOOT_REDRAW_MOVE 以上広くする
+ */
+const LOOT_DRAW_RANGE = 90;
+const LOOT_REDRAW_MOVE = 24;
 const MAX_BINS = 400;
 const MAX_DEATHBOXES = 100;
 const MAX_MARKERS = MAX_BINS + MAX_DEATHBOXES;
@@ -231,6 +237,7 @@ export class Renderer {
   private groundItems: Record<ItemCategory, THREE.InstancedMesh>;
   private lootHighlight: THREE.Mesh;
   private lootVersion = -1;
+  private lootAt: Vec = { x: Infinity, y: Infinity };
   private dummy = new THREE.Object3D();
   private raycaster = new THREE.Raycaster();
   private aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GUN_Y);
@@ -846,9 +853,12 @@ export class Renderer {
     return l.angle;
   }
 
-  private syncLoot(w: World) {
-    if (this.lootVersion === w.lootVersion) return;
+  /** 箱と落ちている物は、プレイヤーの近くのものだけを描く。中身が変わったときと、前に描いた所から LOOT_REDRAW_MOVE 動いたときに描き直す */
+  private syncLoot(w: World, px: number, py: number) {
+    const moved = Math.hypot(px - this.lootAt.x, py - this.lootAt.y) > LOOT_REDRAW_MOVE;
+    if (this.lootVersion === w.lootVersion && !moved) return;
     this.lootVersion = w.lootVersion;
+    this.lootAt = { x: px, y: py };
     const col = new THREE.Color();
     const counts = { bins: 0, deathboxes: 0, ammo: 0, heal: 0, throwable: 0, material: 0, money: 0, buff: 0, glows: 0 };
     let markers = 0;
@@ -867,6 +877,7 @@ export class Renderer {
       counts.glows++;
     };
     for (const l of w.loot) {
+      if (Math.abs(l.pos.x - px) > LOOT_DRAW_RANGE || Math.abs(l.pos.y - py) > LOOT_DRAW_RANGE) continue;
       if (l.kind === "bin" || l.kind === "deathbox") {
         const state: BoxState = l.items.length === 0 ? "empty" : l.opened ? "opened" : "closed";
         const isBin = l.kind === "bin";
@@ -1085,7 +1096,7 @@ export class Renderer {
     this.particleMesh.instanceMatrix.needsUpdate = true;
     if (this.particleMesh.instanceColor) this.particleMesh.instanceColor.needsUpdate = true;
 
-    this.syncLoot(w);
+    this.syncLoot(w, px, py);
     this.renderThrowables(w, alpha, frameDt);
     this.renderThrowPreview(w, throwPreview, aim);
     this.renderSkillObjects(w, px, py);

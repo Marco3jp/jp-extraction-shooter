@@ -25,6 +25,8 @@ export class InputState {
   onInteract: () => boolean = () => false;
   onDebug: (key: "sight" | "beacon") => void = () => {};
   onRestart: () => void = () => {};
+  /** 画面（持ち物の画面の外）を左クリックしたとき。true を返したら撃たない */
+  onClick: () => boolean = () => false;
 
   constructor(target: HTMLElement) {
     window.addEventListener("keydown", (e) => {
@@ -73,7 +75,7 @@ export class InputState {
       this.mouse.y = e.clientY;
     });
     target.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.fire = true;
+      if (e.button === 0 && !this.onClick()) this.fire = true;
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.fire = false;

@@ -415,6 +415,26 @@ const rich = (): Profile => {
     );
   }
 
+  // 倒したとき：速射は効いている時間が伸び、横滑りダッシュはクールダウンが終わる
+  {
+    const w = withKit({ skill: "rapidFire" });
+    const k = w.player.kit!;
+    runFor(w, 30, (i) => ({ skill: i === 0 }));
+    const before = k.skillT;
+    const e = enemyAt(w, { x: w.player.pos.x + 5, y: w.player.pos.y });
+    applyDamage(w, e, 999, w.player, e.pos);
+    const after = k.skillT;
+    const until = w.player.mods.find((m) => m.source === "skill:rapidFire")?.until ?? 0;
+    const w2 = withKit({ skill: "slide" });
+    runFor(w2, 30, (i) => ({ skill: i === 0 }));
+    const cd = w2.player.kit!.skillCd;
+    const e2 = enemyAt(w2, { x: w2.player.pos.x + 5, y: w2.player.pos.y });
+    applyDamage(w2, e2, 999, w2.player, e2.pos);
+    console.log(
+      `倒したとき: 速射の残り ${before.toFixed(2)} → ${after.toFixed(2)}秒（修正が切れるまで ${(until - w.time).toFixed(2)}秒）、横滑りダッシュのクールダウン ${cd.toFixed(2)} → ${w2.player.kit!.skillCd.toFixed(2)}秒`,
+    );
+  }
+
   // 一定時間で進んだ距離
   {
     const q = openLine(60);

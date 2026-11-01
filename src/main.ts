@@ -193,6 +193,12 @@ async function main() {
   input.onInventory = () => {
     if (mode === "playing") hud.toggleInventory();
   };
+  // 持ち物の画面は、画面の外をクリックしたら閉じる
+  input.onClick = () => {
+    if (mode !== "playing" || !hud.panel.open) return false;
+    hud.closePanel();
+    return true;
+  };
   input.onMap = () => {
     if (mode === "playing") hud.bigMap = !hud.bigMap;
   };

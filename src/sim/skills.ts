@@ -1,6 +1,6 @@
 import { cancelHeal } from "./combat";
 import {
-  BARRIER, DASH, DT, FIXED_RAIL, HEAL_SENSE, OVERSHIELD, RAIL, SCAN, SKILLS, SLIDE, ULTS, type StatMod,
+  BARRIER, DASH, DT, FIXED_RAIL, HEAL_SENSE, OVERSHIELD, RAIL, RAPID_FIRE, SCAN, SKILLS, SLIDE, ULTS, type StatMod,
 } from "./data";
 import { Solid, type Vec } from "./map";
 import { applyActorModifiers, computeWeapon } from "./stats";
@@ -122,7 +122,15 @@ export function useUlt(w: World, a: Actor, aim: Vec): boolean {
 
 /** 倒したとき */
 export function onKill(w: World, killer: Actor) {
-  if (!killer.alive || killer.killShield <= 0) return;
+  if (!killer.alive) return;
+  const k = killer.kit;
+  if (k?.skill === "rapidFire" && k.skillT > 0) {
+    const m = killer.mods.find((x) => x.source === "skill:rapidFire");
+    if (m?.until != null) m.until += RAPID_FIRE.killExtend;
+    k.skillT += RAPID_FIRE.killExtend;
+  }
+  if (k?.skill === "slide") k.skillCd = 0;
+  if (killer.killShield <= 0) return;
   const before = killer.shield;
   killer.shield = Math.min(killer.shieldMax, killer.shield + killer.killShield);
   if (killer.shield > before) w.events.push({ type: "killShield", actor: killer.id, amount: killer.shield - before });

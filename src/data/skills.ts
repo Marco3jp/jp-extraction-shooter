@@ -15,8 +15,9 @@ export type UltId = "barrier" | "scan" | "rail" | "bottomless";
 export const OVERSHIELD = { amount: 50, duration: 10 };
 export const HASTE = { duration: 8, moveMul: 0.3 };
 /** turnRate は 1 秒に曲がれる角度（度） */
-export const SLIDE = { distance: 9, time: 0.6, turnRate: 150 };
-export const RAPID_FIRE = { duration: 8, rate: 0.25, reload: -0.4 };
+export const SLIDE = { distance: 18, time: 1.2, turnRate: 150 };
+/** killExtend は、効いている間に倒すと伸びる秒数 */
+export const RAPID_FIRE = { duration: 8, rate: 0.25, reload: -0.4, killExtend: 3 };
 export const KILL_SHIELD = 50;
 export const DAMAGE_UP = 0.06;
 /** offsetMin〜offsetMax だけ敵の位置から中心をずらす。回復中は遅いので、置き直すまでの 1 秒では円の外へ出ない */
@@ -25,7 +26,7 @@ export const HEAL_SENSE = { range: 40, radius: 6, every: 1, offsetMin: 1.5, offs
 export const BARRIER = { length: 4, hp: 400, duration: 30, range: 25, height: 1.6 };
 export const SCAN = { range: 80, duration: 8, level: 3 };
 /** board はレールに乗り直せる距離 */
-export const RAIL = { length: 80, speed: 22, duration: 20, board: 1.6 };
+export const RAIL = { length: 80, speed: 22, duration: 60, board: 1.6 };
 export const BOTTOMLESS = { duration: 12 };
 
 /** ラン開始時にアルティメットが溜まっているか */
@@ -71,11 +72,11 @@ export const SKILLS: Record<SkillId, SkillDef> = {
   },
   slide: {
     name: "横滑りダッシュ", style: "奇襲", cooldown: 18, duration: SLIDE.time,
-    text: `${SLIDE.time}秒かけて ${SLIDE.distance}m 進む。移動キーの向きへ曲がれる。撃てる`,
+    text: `${SLIDE.time}秒かけて ${SLIDE.distance}m 進む。移動キーの向きへ曲がれる。撃てる。倒すとクールダウンが終わる`,
   },
   rapidFire: {
     name: "速射", style: "攻撃", cooldown: 25, duration: RAPID_FIRE.duration,
-    text: `${RAPID_FIRE.duration}秒間、連射速度 +${RAPID_FIRE.rate * 100}%・リロード時間 −${-RAPID_FIRE.reload * 100}%`,
+    text: `${RAPID_FIRE.duration}秒間、連射速度 +${RAPID_FIRE.rate * 100}%・リロード時間 −${-RAPID_FIRE.reload * 100}%。効いている間に倒すと ${RAPID_FIRE.killExtend}秒伸びる`,
     mods: [{ stat: "rate", mul: RAPID_FIRE.rate }, { stat: "reload", mul: RAPID_FIRE.reload }],
   },
 };
@@ -113,7 +114,7 @@ export const ULTS: Record<UltId, UltDef> = {
   },
   rail: {
     name: "長距離移動レール", cooldown: 120, duration: RAIL.duration,
-    text: `カーソルの方向へ最大 ${RAIL.length}m のレールを敷き、秒速 ${RAIL.speed}m で進む。撃てる。レールは ${RAIL.duration}秒残り、E で乗り直せる`,
+    text: `カーソルの方向へ最大 ${RAIL.length}m のレールを敷き、秒速 ${RAIL.speed}m で進む。撃てる。レールは ${RAIL.duration}秒残り、E で乗り直せる。クールダウンは敷いた時点から数える`,
   },
   bottomless: {
     name: "弾倉なし", cooldown: 75, duration: BOTTOMLESS.duration,
