@@ -19,7 +19,12 @@ npm run dev
 
 セーブはブラウザの IndexedDB に入る。拠点の「セーブ」から JSON で書き出せる。
 
-地図を取り直すときは、`tools/osm_to_map.py` の冒頭にある範囲を書き換え、Overpass API から `tools/osm-raw/area.json` を取ってから `npm run map` を実行する。
+地図を取り直すときは、`tools/maps/akihabara.json` の範囲などを書き換えてから、次を実行する。
+
+```sh
+npm run fetch-map -- tools/maps/akihabara.json
+npm run map -- tools/maps/akihabara.json
+```
 
 地図データ © OpenStreetMap contributors（ODbL）
 
