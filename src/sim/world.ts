@@ -416,9 +416,10 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     ? nearestFree(start.x, start.y)
     : nearestFree(layout.start[0], layout.start[1]);
   if (!startPos) throw new Error("出発地点の周りに空いている場所が見つからない");
-  // 遠くてまだ読んでいない脱出地点は、書いてある位置のまま置く
+  // 変換のとき（tools/extracts.py）に開けたマスへ寄せてあるので、そのまま置く。
+  // ここで空きマスを探すと、まだ読んでいない区画の脱出地点が、読んである区画の端へ動いてしまう
   const extracts: Extract[] = layout.extracts.map(([x, y]) => ({
-    pos: nearestFree(x, y) ?? { x, y }, readyAt: null, ready: false, progress: 0,
+    pos: { x, y }, readyAt: null, ready: false, progress: 0,
   }));
 
   let nextId = 1;

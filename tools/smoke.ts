@@ -14,7 +14,7 @@ import { buffsOf } from "../src/sim/buffs";
 import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
-import { CHUNK, GameMap, decodeChunk, type ChunkJson, type MapIndex } from "../src/sim/map";
+import { CHUNK, GameMap, decodeChunk, type ChunkJson, type LoadedChunk, type MapIndex } from "../src/sim/map";
 import { ChunkStreamer, STREAM_RANGE, type StreamRange } from "../src/stream";
 import { Rng } from "../src/sim/rng";
 import { syncSpawns } from "../src/sim/spawn";
@@ -30,15 +30,22 @@ const MAP_DIR = "public/maps/akihabara";
 const mapIndex = JSON.parse(readFileSync(`${MAP_DIR}/index.json`, "utf8")) as MapIndex;
 const readChunk = (i: number, j: number) =>
   decodeChunk(JSON.parse(gunzipSync(readFileSync(`${MAP_DIR}/${i}_${j}.json.gz`)).toString("utf8")) as ChunkJson);
+const decoded = new Map<string, LoadedChunk>();
+const cachedChunk = (i: number, j: number) => {
+  const k = `${i}_${j}`;
+  if (!decoded.has(k)) decoded.set(k, readChunk(i, j));
+  return Promise.resolve(decoded.get(k)!);
+};
 const [BX0, BY0, BX1, BY1] = mapIndex.bounds;
-const chunks = isMainThread ? [] : mapIndex.chunks.map(([i, j]) => readChunk(i, j));
-// 区画を読み直す項目が区画の並びを変えるので、どの順で回しても同じ結果になるよう項目ごとに作り直す
-let map: GameMap;
-const freshMap = () => {
+const layoutStart: Vec = { x: mapIndex.layout.start[0], y: mapIndex.layout.start[1] };
+/** ゲームの出撃と同じく、p から読む距離の内の区画だけ置いたマップ。マップ全体は区画の置き場所に収まらない */
+const mapAround = async (p: Vec) => {
   const m = new GameMap(mapIndex);
-  for (const c of chunks) m.addChunk(c);
+  await new ChunkStreamer(m, cachedChunk).loadAround(p);
   return m;
 };
+// 区画を読み直す項目が区画の並びを変えるので、どの順で回しても同じ結果になるよう項目ごとに作り直す
+let map: GameMap;
 
 type Section = { name: string; run: () => void | Promise<void>; timed: boolean };
 const sections: Section[] = [];
@@ -65,7 +72,7 @@ section("漁れる物の量", () => {
     const k = e.faction >= 100 ? "単独" : `勢力${e.faction}`;
     byFaction.set(k, (byFaction.get(k) ?? 0) + 1);
   }
-  console.log(`箱 ${bins.length}個（山 ${bins.length * 4}）　地面 ${ground.length}山　敵 ${enemies.length}人`, Object.fromEntries(byFaction));
+  console.log(`出撃時に読む ${STREAM_RANGE.load}m の内: 箱 ${bins.length}個（山 ${bins.length * 4}）　地面 ${ground.length}山　敵 ${enemies.length}人`, Object.fromEntries(byFaction));
   const byUse = new Map<string, number>();
   for (const b of bins) {
     const cx = Math.floor(b.pos.x), cy = Math.floor(b.pos.y);
@@ -142,9 +149,10 @@ for (const seed of [1, 2]) section(`漁りながら脱出 seed=${seed}`, () => {
 });
 
 // キャンプから始めると、その近くに出て、近くに敵がいない。迎えを呼ぶと近くの敵が寄ってくる
-section("キャンプ", () => {
+section("キャンプ", async () => {
   const camp = { x: BX0 + (BX1 - BX0) * 0.2, y: BY0 + (BY1 - BY0) * 0.3 };
   for (const seed of [1, 2, 3]) {
+    map = await mapAround(camp);
     const w = createWorld(map, seed, baseLoadout, camp);
     const p = w.player;
     const off = Math.hypot(p.pos.x - camp.x, p.pos.y - camp.y);
@@ -617,7 +625,7 @@ section("強化パーツ", () => {
     }
   }
   const avg = Object.fromEntries(BUFF_IDS.map((id) => [BUFFS[id].name, ((byId.get(id) ?? 0) / seeds.length).toFixed(1)]));
-  console.log(`強化パーツ: 1ランに平均 ${(total / seeds.length).toFixed(1)}個`, avg);
+  console.log(`強化パーツ: 出撃時に読む ${STREAM_RANGE.load}m の内に平均 ${(total / seeds.length).toFixed(1)}個`, avg);
 
   // 足元に強化パーツを1つ置いて E で拾わせる
   const pick = (w: World, id: BuffId) => {
@@ -1312,7 +1320,7 @@ if (isMainThread) {
     console.log = (...args: unknown[]) => {
       lines.push(format(...args) + "\n");
     };
-    map = freshMap();
+    map = await mapAround(layoutStart);
     const t = performance.now();
     let error: string | undefined;
     try {
