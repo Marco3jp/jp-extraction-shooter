@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>jp-extraction-shooter（仮称）</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="damage"></div>
+    <div id="tags"></div>
+    <div id="hud">
+      <div id="info"></div>
+      <div id="vitals">
+        <div id="shield"><div></div><div></div><div></div><div></div></div>
+        <div id="health"></div>
+        <div id="vitals-text"></div>
+      </div>
+      <div id="weapons"></div>
+      <div id="items"></div>
+      <div id="bag"></div>
+      <div id="heal"><div class="label"></div><div class="track"><div class="fill"></div></div></div>
+      <div id="prompt"></div>
+      <div id="toast"></div>
+      <div id="extract-arrow"><div class="dot"></div><div class="dist"></div></div>
+      <canvas id="minimap" width="220" height="220"></canvas>
+      <div id="feed"></div>
+      <div id="attribution">地図データ © OpenStreetMap contributors (ODbL)</div>
+    </div>
+    <div id="inventory"></div>
+    <div id="bigmap"><canvas></canvas><div class="legend">
+      <span><i style="background:#4fb0ff"></i>自分</span>
+      <span><i style="background:#e0643c"></i>勢力A</span>
+      <span><i style="background:#d8c040"></i>勢力B</span>
+      <span><i style="background:#a8a8b8"></i>単独</span>
+      <span><i class="ring"></i>銃声</span>
+      <span><i style="background:#e05050"></i>倒された相手の持ち物</span>
+      <span>M / クリックで閉じる</span>
+    </div></div>
+    <div id="crosshair"></div>
+    <div id="overlay"><div class="panel"></div></div>
+    <div id="hub"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

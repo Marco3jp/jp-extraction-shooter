@@ -1,0 +1,226 @@
+import { useState } from "preact/hooks";
+import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
+import { MIN_TTK } from "../../data/constants";
+import { ARMORS, BAGS } from "../../data/gear";
+import { WEAPON_BASES, type WeaponDef, type WeaponStat, type WeaponType } from "../../data/weapons";
+import {
+  attachmentsFree,
+  profileWeapon,
+  setAttachment,
+  setLoadoutArmor,
+  setLoadoutBag,
+  setLoadoutWeapon,
+  type Profile,
+} from "../../meta/profile";
+import { computeWeapon, theoreticalTtk } from "../../sim/stats";
+import { formatMoveMul, rarityColor, toneOf, trimNum, type Tone } from "./format";
+import { ModList } from "./parts";
+
+type Props = {
+  profile: Profile;
+  onChange: (next: Profile) => void;
+  onDeploy: () => void;
+};
+
+export function Loadout({ profile, onChange, onDeploy }: Props) {
+  const [editing, setEditing] = useState<WeaponType>(profile.loadout.weapons[0]);
+  const target = profile.weapons.includes(editing) ? editing : profile.loadout.weapons[0];
+
+  const update = (fn: (p: Profile) => void) => {
+    const next = structuredClone(profile);
+    fn(next);
+    onChange(next);
+  };
+
+  return (
+    <div class="hub-loadout">
+      <section class="hub-panel">
+        <h2>持ち込む装備</h2>
+        {([0, 1] as const).map((i) => (
+          <div class="hub-field">
+            <div class="hub-field-label">{i === 0 ? "メイン" : "サブ"}</div>
+            <div class="hub-chips">
+              {profile.weapons.map((w) => (
+                <button
+                  class={`hub-chip${profile.loadout.weapons[i] === w ? " selected" : ""}`}
+                  onClick={() => update((p) => setLoadoutWeapon(p, i, w))}
+                >
+                  {WEAPON_BASES[w].name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div class="hub-field">
+          <div class="hub-field-label">防具</div>
+          <div class="hub-chips">
+            {profile.armors.map((a) => (
+              <button
+                class={`hub-chip${profile.loadout.armor === a ? " selected" : ""}`}
+                onClick={() => update((p) => setLoadoutArmor(p, a))}
+              >
+                <span>{ARMORS[a].name}</span>
+                <span class="hub-chip-sub">
+                  シールド {ARMORS[a].shield}
+                  {formatMoveMul(ARMORS[a].moveMul) && `・${formatMoveMul(ARMORS[a].moveMul)}`}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div class="hub-field">
+          <div class="hub-field-label">カバン</div>
+          <div class="hub-chips">
+            {profile.bags.map((b) => (
+              <button
+                class={`hub-chip${profile.loadout.bag === b ? " selected" : ""}`}
+                onClick={() => update((p) => setLoadoutBag(p, b))}
+              >
+                <span>{BAGS[b].name}</span>
+                <span class="hub-chip-sub">{BAGS[b].slots}枠</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <button class="hub-deploy" onClick={onDeploy}>
+          出撃
+        </button>
+      </section>
+
+      <section class="hub-panel">
+        <h2>武器の調整</h2>
+        <div class="hub-chips hub-weapon-picker">
+          {profile.weapons.map((w) => {
+            const idx = profile.loadout.weapons.indexOf(w);
+            return (
+              <button class={`hub-chip${target === w ? " selected" : ""}`} onClick={() => setEditing(w)}>
+                <span>{WEAPON_BASES[w].name}</span>
+                {idx >= 0 && <span class="hub-chip-sub">{idx === 0 ? "メイン" : "サブ"}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <p class="hub-role">{WEAPON_BASES[target].role}</p>
+        <div class="hub-editor">
+          <div class="hub-slots">
+            {SLOT_ORDER.map((s) => (
+              <SlotPicker profile={profile} weapon={target} slot={s} onPick={(id) => update((p) => setAttachment(p, target, s, id))} />
+            ))}
+          </div>
+          <StatsTable weapon={target} current={profileWeapon(profile, target)} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SlotPicker({
+  profile,
+  weapon,
+  slot,
+  onPick,
+}: {
+  profile: Profile;
+  weapon: WeaponType;
+  slot: SlotId;
+  onPick: (id: AttachmentId | null) => void;
+}) {
+  const current = profile.weaponConfig[weapon][slot] ?? null;
+  const owned = ATTACHMENT_IDS.filter((id) => ATTACHMENTS[id].slot === slot && (profile.attachments[id] ?? 0) > 0);
+  return (
+    <div class="hub-slot">
+      <div class="hub-field-label">{SLOTS[slot].name}</div>
+      <div class="hub-slot-options">
+        <button class={`hub-option${current === null ? " selected" : ""}`} onClick={() => onPick(null)}>
+          <span class="hub-option-name">なし</span>
+        </button>
+        {owned.map((id) => {
+          const free = attachmentsFree(profile, id);
+          const usable = current === id || free > 0;
+          return (
+            <button
+              class={`hub-option${current === id ? " selected" : ""}`}
+              disabled={!usable}
+              onClick={() => onPick(id)}
+            >
+              <span class="hub-option-name" style={{ color: rarityColor(ATTACHMENTS[id].rarity) }}>
+                {ATTACHMENTS[id].name}
+              </span>
+              <span class="hub-option-count">{usable ? `残り ${free}` : "ほかの武器に付けている"}</span>
+              <ModList id={id} />
+            </button>
+          );
+        })}
+        {owned.length === 0 && <p class="muted hub-slot-empty">持っていない。クラフトで作れる</p>}
+      </div>
+    </div>
+  );
+}
+
+type Row = { label: string; stat: WeaponStat; value: (w: WeaponDef) => number; text: (w: WeaponDef) => string };
+
+const ROWS: Row[] = [
+  {
+    label: "ダメージ",
+    stat: "damage",
+    value: (w) => w.damage * w.pellets,
+    text: (w) => (w.pellets > 1 ? `${trimNum(w.damage, 1)}×${w.pellets}` : trimNum(w.damage, 1)),
+  },
+  { label: "連射速度", stat: "rate", value: (w) => w.rate, text: (w) => `${trimNum(w.rate, 1)}発/秒` },
+  { label: "マガジン", stat: "mag", value: (w) => w.mag, text: (w) => `${w.mag}発` },
+  { label: "リロード時間", stat: "reload", value: (w) => w.reload, text: (w) => `${trimNum(w.reload)}秒` },
+  { label: "拡散", stat: "spreadBase", value: (w) => w.spreadBase, text: (w) => `${trimNum(w.spreadBase)}°` },
+  { label: "反動", stat: "spreadPerShot", value: (w) => w.spreadPerShot, text: (w) => `${trimNum(w.spreadPerShot)}°` },
+  { label: "移動中の拡散", stat: "spreadMoving", value: (w) => w.spreadMoving, text: (w) => `${trimNum(w.spreadMoving)}°` },
+  { label: "射程", stat: "range", value: (w) => w.range, text: (w) => `${trimNum(w.range, 1)}m` },
+  { label: "弾速", stat: "bulletSpeed", value: (w) => w.bulletSpeed, text: (w) => `${trimNum(w.bulletSpeed, 1)}m/秒` },
+];
+
+const PELLET_ROW: Row = {
+  label: "散弾の広がり",
+  stat: "pelletSpread",
+  value: (w) => w.pelletSpread,
+  text: (w) => `${trimNum(w.pelletSpread)}°`,
+};
+
+function StatsTable({ weapon, current }: { weapon: WeaponType; current: WeaponDef }) {
+  const base = computeWeapon(weapon, []);
+  const rows = base.pellets > 1 ? [...ROWS, PELLET_ROW] : ROWS;
+  const ttkNow = theoreticalTtk(current);
+  const ttkBase = theoreticalTtk(base);
+  const ttkTone: Tone = Math.abs(ttkNow.ttk - ttkBase.ttk) < 1e-6 ? "same" : ttkNow.ttk < ttkBase.ttk ? "good" : "bad";
+  return (
+    <div class="hub-stats">
+      <div class="hub-ttk">
+        <span class="muted">理論TTK</span>
+        <span class={`hub-ttk-value tone-${ttkTone}`}>{trimNum(ttkNow.ttk)}秒</span>
+        <span class="muted">
+          体力200の相手に{ttkNow.shots}発・素の状態は{trimNum(ttkBase.ttk)}秒
+        </span>
+        {current.style && <span class="hub-style">{current.style}</span>}
+      </div>
+      {current.rateClamped && (
+        <p class="hub-note">理論TTKが{MIN_TTK}秒を下回るため、連射速度を下げています</p>
+      )}
+      {!ttkNow.fitsMag && <p class="hub-note">マガジン1本では倒しきれません</p>}
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>素の状態</th>
+            <th>今の状態</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <th>{r.label}</th>
+              <td class="muted">{r.text(base)}</td>
+              <td class={`tone-${toneOf(r.stat, r.value(current) - r.value(base))}`}>{r.text(current)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

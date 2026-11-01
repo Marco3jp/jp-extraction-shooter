@@ -1,0 +1,52 @@
+import type { AttachmentId } from "./attachments";
+import type { ArmorId, BagId } from "./gear";
+import type { MaterialId } from "./items";
+import type { WeaponType } from "./weapons";
+
+export type RecipeOutput =
+  | { kind: "material"; id: MaterialId; count: number }
+  | { kind: "attachment"; id: AttachmentId }
+  | { kind: "weapon"; id: WeaponType }
+  | { kind: "armor"; id: ArmorId }
+  | { kind: "bag"; id: BagId };
+
+export type RecipeCategory = "material" | "attachment" | "weapon" | "gear";
+
+export type Recipe = {
+  id: string;
+  category: RecipeCategory;
+  output: RecipeOutput;
+  money: number;
+  materials: Partial<Record<MaterialId, number>>;
+};
+
+const att = (id: AttachmentId, money: number, materials: Recipe["materials"]): Recipe => ({
+  id: `att-${id}`, category: "attachment", output: { kind: "attachment", id }, money, materials,
+});
+
+/** 必要な素材とお金は仮 */
+export const RECIPES: Recipe[] = [
+  { id: "mat-circuit", category: "material", output: { kind: "material", id: "circuit", count: 1 }, money: 200, materials: { junk: 5 } },
+  { id: "mat-precision", category: "material", output: { kind: "material", id: "precision", count: 1 }, money: 500, materials: { circuit: 4 } },
+
+  att("longBarrel", 300, { junk: 6 }),
+  att("shortBarrel", 300, { junk: 6 }),
+  att("chokeBarrel", 600, { junk: 6, circuit: 2 }),
+  att("rapidReceiver", 700, { junk: 4, circuit: 3 }),
+  att("heavyReceiver", 700, { junk: 6, circuit: 3 }),
+  att("precisionReceiver", 1500, { circuit: 4, precision: 1 }),
+  att("extMag", 300, { junk: 8 }),
+  att("quickMag", 300, { junk: 5, circuit: 1 }),
+  att("drumMag", 800, { junk: 10, circuit: 2 }),
+  att("stableStock", 300, { junk: 7 }),
+  att("lightStock", 300, { junk: 5, circuit: 1 }),
+
+  { id: "wpn-smg", category: "weapon", output: { kind: "weapon", id: "smg" }, money: 800, materials: { junk: 10, circuit: 2 } },
+  { id: "wpn-shotgun", category: "weapon", output: { kind: "weapon", id: "shotgun" }, money: 1000, materials: { junk: 12, circuit: 2 } },
+  { id: "wpn-long", category: "weapon", output: { kind: "weapon", id: "long" }, money: 1500, materials: { junk: 8, circuit: 4, precision: 1 } },
+
+  { id: "arm-reinforced", category: "gear", output: { kind: "armor", id: "reinforced" }, money: 1500, materials: { circuit: 4, precision: 1 } },
+  { id: "arm-heavy", category: "gear", output: { kind: "armor", id: "heavy" }, money: 4000, materials: { circuit: 8, precision: 3 } },
+  { id: "bag-medium", category: "gear", output: { kind: "bag", id: "medium" }, money: 800, materials: { junk: 15, circuit: 2 } },
+  { id: "bag-large", category: "gear", output: { kind: "bag", id: "large" }, money: 2500, materials: { circuit: 6, precision: 2 } },
+];

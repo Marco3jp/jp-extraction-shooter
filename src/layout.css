@@ -1,0 +1,15 @@
+#hub {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+body.in-hub #hud,
+body.in-hub #tags,
+body.in-hub #crosshair,
+body.in-hub #inventory,
+body.in-hub #bigmap,
+body.in-hub #damage {
+  display: none !important;
+}
