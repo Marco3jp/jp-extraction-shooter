@@ -135,7 +135,7 @@ export class Sfx {
         }
         case "death": {
           const t = byId.get(ev.actor);
-          const v = t && t.team !== "enemy" ? 1 : near(ev.pos, 60);
+          const v = t && t.team !== "enemy" ? 1 : near(ev.pos, SHOT_NOTICE_RANGE);
           if (v > 0) this.burst(0.4, 200, 0.5 * v, 1);
           if (t?.team === "partner") this.tone([660, 440, 330], 0.1, 0.2, "sawtooth");
           break;
