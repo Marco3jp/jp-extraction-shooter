@@ -2,7 +2,7 @@
 // 使い方: npm run smoke
 import { readFileSync } from "node:fs";
 import {
-  BARRIER, BUFF_IDS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
+  BARRIER, BUFF_IDS, PARTNER_TACTICS, BUFFS, BUILDING_USE, DASH, DT, HEAL_SENSE, ITEMS, OVERSHIELD, PARTNER_LEASH, PARTNER_REVIVE, SCAN, SKILLS, THERMITE,
   type BuffId, type KitChoice,
 } from "../src/sim/data";
 import { buffsOf } from "../src/sim/buffs";
@@ -11,7 +11,7 @@ import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
 import { GameMap, type MapJson } from "../src/sim/map";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
-import { createWorld, type World } from "../src/sim/world";
+import { createWorld, type Actor, type World } from "../src/sim/world";
 import { craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutWeapon, type Profile } from "../src/meta/profile";
 import { RECIPES } from "../src/data/recipes";
 import type { WeaponType } from "../src/data/weapons";
@@ -742,7 +742,8 @@ const rich = (): Profile => {
   }
 
   // パートナー1体と敵の中距離型1人が 18m で撃ち合う。プレイヤーは倒れた扱いにして、敵に狙わせない
-  for (const model of [1, 2] as const) {
+  for (const [model, mode] of [[1, "cover"], [2, "cover"], [1, "classic"], [2, "classic"]] as const) {
+    PARTNER_TACTICS.mode = mode;
     let wins = 0, total = 0, hp = 0;
     for (let seed = 1; seed <= 100; seed++) {
       const w = createWorld(map, seed, makeRunLoadout(profWith(1, model)));
@@ -769,7 +770,89 @@ const rich = (): Profile => {
         hp += a.shield + a.health;
       }
     }
-    console.log(`パートナー（${model === 1 ? "初期型" : "改良型"}） 対 敵の中距離型 1対1: 勝ち ${wins}/${total} 勝ったときの残り体力 平均 ${(hp / Math.max(wins, 1)).toFixed(0)}/${model === 1 ? 200 : 225}`);
+    PARTNER_TACTICS.mode = "cover";
+    console.log(`パートナー（${model === 1 ? "初期型" : "改良型"}・${mode === "cover" ? "遮蔽を使う" : "前の作り"}） 対 敵の中距離型 1対1: 勝ち ${wins}/${total} 勝ったときの残り体力 平均 ${(hp / Math.max(wins, 1)).toFixed(0)}/${model === 1 ? 200 : 225}`);
+  }
+
+  // パートナーの回復。散策中は満タンまで巻き、戦闘中は隙を見て巻く
+  {
+    const setup = () => {
+      const w = createWorld(map, 7, makeRunLoadout(profWith(1)));
+      for (const o of w.actors) if (o.team === "enemy") o.alive = false;
+      const a = w.actors.find((x) => x.team === "partner")!;
+      return { w, a, p: w.player };
+    };
+    const record = (w: World, a: Actor, ticks: number, each?: () => void) => {
+      const log: string[] = [];
+      for (let i = 0; i < ticks; i++) {
+        each?.();
+        step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 1, y: w.player.pos.y } });
+        for (const ev of w.events) {
+          if (ev.type === "healStart" && ev.actor === a.id) log.push(`${(w.time).toFixed(1)}s ${ev.kind}`);
+          if (ev.type === "reloadStart" && ev.actor === a.id) log.push(`${(w.time).toFixed(1)}s リロード`);
+          if (ev.type === "healCancel" && ev.actor === a.id) log.push(`${(w.time).toFixed(1)}s やめた`);
+        }
+      }
+      return log;
+    };
+    // 散策中：シールド 0・ヘルス 30 から
+    {
+      const { w, a } = setup();
+      a.shield = 0;
+      a.health = 30;
+      const log = record(w, a, 30 * 25);
+      console.log(`パートナーの回復（散策中）: ${log.join("、")} → シールド ${a.shield}/${a.shieldMax} ヘルス ${a.health}`);
+    }
+    // 戦闘中：撃ってこない敵を前に、条件を変えて最初の数秒を見る。hidden なら敵を見えない所（45m 先）に置き、見失った直後にする
+    const fight = (label: string, f: (a: Actor, e: Actor) => void, ticks = 30 * 6, hidden = false) => {
+      const { w, a, p } = setup();
+      const e = w.actors.find((x) => x.team === "enemy")!;
+      let spot: Vec | null = null;
+      for (let k = 0; k < 64 && !spot; k++) {
+        const ang = (k / 64) * Math.PI * 2;
+        const r = hidden ? 45 : 20;
+        const q = { x: a.pos.x + Math.cos(ang) * r, y: a.pos.y + Math.sin(ang) * r };
+        if (!map.blockedAt(q.x, q.y) && map.los(q, a.pos)) spot = q;
+      }
+      e.alive = true;
+      e.pos = spot!;
+      a.ai!.target = e.id;
+      a.ai!.lastSeen = { ...spot! };
+      a.ai!.lastSeenT = w.time;
+      f(a, e);
+      const log = record(w, a, ticks, () => {
+        e.pos = { ...spot! };
+        e.vel = { x: 0, y: 0 };
+        e.ai!.restT = 1;
+        e.shield = Math.max(e.shield, 1);
+        p.health = 100;
+      });
+      console.log(`パートナーの回復（${label}）: ${log.join("、") || "巻かない"} → シールド ${a.shield}/${a.shieldMax} ヘルス ${a.health}`);
+    };
+    fight("戦闘中・見えていない・マガジンが空でシールド 50", (a) => {
+      a.shield = 50;
+      a.weapons[0].mag = 0;
+    }, 30 * 3, true);
+    fight("戦闘中・見えていない・ヘルス 45", (a) => {
+      a.health = 45;
+    }, 30 * 4, true);
+    fight("戦闘中・見えている・マガジンが空でシールド 50", (a) => {
+      a.shield = 50;
+      a.weapons[0].mag = 0;
+    }, 30 * 3);
+    fight("戦闘中・見えている・シールド 0 でヘルス 80", (a) => {
+      a.shield = 0;
+      a.health = 80;
+    }, 30 * 1);
+    fight("戦闘中・相手の残りが 40", (a, e) => {
+      a.shield = 50;
+      a.weapons[0].mag = 0;
+      e.shield = 0;
+      e.health = 40;
+    }, 30 * 1);
+    fight("戦闘中・ヘルス 20", (a) => {
+      a.health = 20;
+    }, 30 * 12);
   }
 
   // 倒れたパートナーを起こす。撃たれたら押し直しになる

@@ -95,7 +95,7 @@
 動きは `src/sim/partner.ts`、数値は `src/data/partners.ts`。設計は `docs/plans/partners.md`。
 
 - `Actor.team` が `"partner"` の人として置く。勢力はプレイヤーと同じなので、弾は当たらない
-- 敵と同じ `Ai` を持ち、経路・遮蔽探し・投げ物の避け方は `ai.ts` の関数を使う。`step` は `team` を見て `updatePartner` と `updateEnemy` を呼び分ける
+- 敵と同じ `Ai` を持ち、経路・投げ物の避け方は `ai.ts` の関数を使う。撃ち合いで隠れる所と出て撃つ所は `findPeekCover` で探し、`Actor.partner.cover` に持つ。`step` は `team` を見て `updatePartner` と `updateEnemy` を呼び分ける
 - 武器は `Actor.build` から `refreshStats` で作る。`ActorBuild.minTtk` で敵と同じ下限を掛け、ダメージと弾速を下げる修正を `Actor.mods` に入れておく
 - 倒れたら `alive` を false にするだけで、持ち物は落とさずランも続く。起こすと `alive` を戻す
 - プレイヤーが当てた相手を `World.focus` に残し、パートナーが優先して狙う

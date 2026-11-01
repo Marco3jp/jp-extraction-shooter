@@ -2,7 +2,7 @@ import {
   BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, BUILDING_USE, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
   GROUND_ITEMS, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, ROAMING_GROUP_RATE, SOLO_COUNT,
   LOOT_TILT, SOLO_FACTION_BASE, SOLO_KINDS,
-  DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
+  DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
   type ActorStats, type BuffId, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
   type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
 } from "./data";
@@ -66,6 +66,16 @@ export type PartnerState = {
   reviveT: number;
   /** 付く位置を決めるときのプレイヤーの向き。プレイヤーの向きへゆっくり寄せる */
   heading: number;
+  /** 遮蔽へ引いてから使う回復 */
+  healKind: HealKind | null;
+  /** 撃ち合いで使っている遮蔽。hide は敵から隠れる所、peek は出て撃つ所、threat は探したときの敵の位置 */
+  cover: { hide: Vec; peek: Vec; threat: Vec; t: number } | null;
+  /** 隠れているか、出て撃っているか */
+  phase: "hide" | "peek";
+  /** 出たときのシールドとヘルスの合計。ここから減った分で隠れ直す */
+  peekHp: number;
+  /** 今隠れている間に、もう巻いたか。隠れるたびに1回だけ巻く */
+  hideHealed: boolean;
 };
 
 /** 持ち込んだスキル。Cd は次に使えるまで、T は効いている残り時間 */
@@ -306,11 +316,14 @@ function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
     path: [], pathTarget: null, repathT: 0,
     target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: 0, reactT: 0,
     strafe: 1, strafeT: 0, stateT: 0, waitT: 0,
-    heals: PARTNER.heals,
+    // 回復の回数を数えるのは前の作りのときだけ（PARTNER_TACTICS）
+    heals: PARTNER_TACTICS.mode === "classic" ? PARTNER_TACTICS.classicHeals : 0,
     roam: false,
     burstT: 0, burstLen: 0.8, restT: 0,
   };
-  a.partner = { index, model, reviveT: 0, heading: -Math.PI / 2 };
+  a.partner = { index, model, reviveT: 0, heading: -Math.PI / 2, healKind: null,
+    cover: null, phase: "hide", peekHp: 0, hideHealed: false,
+  };
   return a;
 }
 
