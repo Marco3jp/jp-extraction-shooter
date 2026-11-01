@@ -11,7 +11,7 @@ export const HEAL_MOVE_SPEED = 2.6;
 export const RELOAD_MOVE_SPEED = 5;
 export const SWAP_TIME = 0.45;
 /** スペースキーの短距離ダッシュ。数値は仮 */
-export const DASH = { distance: 4.5, time: 0.16, cooldown: 5 };
+export const DASH = { distance: 4.5, time: 0.16, cooldown: 5, charges: 1 };
 /** ダッシュをやめてから撃てるようになるまで */
 export const SPRINT_TO_FIRE = 0.15;
 
@@ -32,8 +32,12 @@ export const LOOT_PANEL_RANGE = 3.2;
 /** 銃声が聞こえる距離 */
 export const HEAR_RANGE = 35;
 
-/** 理論 TTK の下限。どの武器・アタッチメントの組み合わせでも、これを下回るときは連射速度を下げて揃える */
-export const MIN_TTK = 1.5;
+/**
+ * 理論 TTK の下限。これを下回る武器・アタッチメントの組み合わせは、連射速度を下げて揃える。
+ * プレイヤーは、理論値で倒すには全弾命中などの条件がそろう必要があるので低めにしている。強すぎたら 1.5・1.25・1.0 と段階的に下げる形にする
+ */
+export const PLAYER_MIN_TTK = 0.75;
+export const ENEMY_MIN_TTK = 1.5;
 /** 理論 TTK を測るときの相手の体力（敵のシールド100＋ヘルス100） */
 export const TTK_TARGET_HP = 200;
 

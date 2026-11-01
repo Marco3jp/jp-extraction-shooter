@@ -662,6 +662,46 @@ body {
   background: #9ad8ff;
 }
 
+#kit {
+  position: absolute;
+  right: 16px;
+  bottom: 104px;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.item.kit {
+  position: relative;
+  min-width: 96px;
+}
+.item.kit .cd {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: #9ad8ff;
+}
+.item.kit.ult .cd {
+  background: #ffd040;
+}
+.item.kit.on {
+  outline: 2px solid var(--accent);
+}
+.item.kit .count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+#kit .item.kit.passive {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  align-self: flex-end;
+  padding: 4px;
+}
+#shield > div.over {
+  --c: #ffd040;
+}
+
 #items .item {
   min-width: 66px;
   padding: 5px 6px;

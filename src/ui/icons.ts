@@ -1,4 +1,5 @@
 import type { ItemId } from "../data/items";
+import { PASSIVES, SKILLS, ULTS, type PassiveId, type SkillId, type Style, type UltId } from "../data/skills";
 
 const OUTLINE = `stroke="#15171b" stroke-width="0.7" stroke-linejoin="round"`;
 
@@ -87,4 +88,30 @@ const BODIES: Record<ItemId, string> = {
 /** アイテムのアイコン（SVG の文字列）。拠点の画面とラン中の HUD の両方で使う */
 export function itemIcon(id: ItemId, size = 20): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 20 20" aria-hidden="true">${BODIES[id]}</svg>`;
+}
+
+const STYLE_COLORS: Record<Style, string> = { 守り: "#4aa0ff", 移動: "#50e070", 奇襲: "#b080ff", 攻撃: "#ff8a3c" };
+export const ULT_COLOR = "#ffd040";
+
+const SHIELD_PATH = "M10 1.6L17 4.2V9.6C17 13.8 14 16.8 10 18.4C6 16.8 3 13.8 3 9.6V4.2Z";
+
+const KIT_BODIES: Record<SkillId | PassiveId | UltId, (c: string) => string> = {
+  overshield: (c) => `<path d="${SHIELD_PATH}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 6V13M6.5 9.5H13.5" stroke="${c}" stroke-width="2" stroke-linecap="round"/>`,
+  haste: (c) => `<path d="M3 4L9 10L3 16M10 4L16 10L10 16" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  slide: (c) => `<path d="M3 16C6 16 8 13 9 10C10 7 12 4 16 4" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"/><path d="M12.5 2.4L16.4 4L14.6 7.6" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  rapidFire: (c) => `<path d="M3 5H11M3 10H14M3 15H11" stroke="${c}" stroke-width="2" stroke-linecap="round"/><path d="M14 3L17.5 5L14 7M15.5 13L19 15L15.5 17" fill="${c}"/>`,
+  killShield: (c) => `<path d="${SHIELD_PATH}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round"/><path d="M7 7L13 13M13 7L7 13" stroke="${c}" stroke-width="2" stroke-linecap="round"/>`,
+  doubleDash: (c) => `<path d="M3 6L7 10L3 14M8.5 6L12.5 10L8.5 14" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><text x="17" y="17.5" font-size="8" font-weight="700" fill="${c}" text-anchor="middle">2</text>`,
+  healSense: (c) => `<circle cx="10" cy="10" r="7.6" fill="none" stroke="${c}" stroke-width="1.5" stroke-dasharray="2.6 2"/><path d="M12 6.5V11.5M9.5 9H14.5" stroke="${c}" stroke-width="1.8" stroke-linecap="round"/>`,
+  damageUp: (c) => `<path d="M5 17V9C5 6.5 6.5 4.5 8 3.5C9.5 4.5 11 6.5 11 9V17Z" fill="${c}"/><path d="M15 16V5M12.4 7.6L15 5L17.6 7.6" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`,
+  barrier: (c) => `<path d="M2 6H18V16H2Z" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round"/><path d="M2 11H18M7 6V11M13 6V11M4.5 11V16M10 11V16M15.5 11V16" stroke="${c}" stroke-width="1.3"/>`,
+  scan: (c) => `<circle cx="10" cy="10" r="2" fill="${c}"/><circle cx="10" cy="10" r="5" fill="none" stroke="${c}" stroke-width="1.3"/><circle cx="10" cy="10" r="8.2" fill="none" stroke="${c}" stroke-width="1.3" opacity="0.6"/>`,
+  rail: (c) => `<path d="M6 18L9 2M14 18L11 2" stroke="${c}" stroke-width="1.6" stroke-linecap="round"/><path d="M5 15H15M6 10.5H14M7 6H13" stroke="${c}" stroke-width="1.3" stroke-linecap="round"/>`,
+  bottomless: (c) => `<path d="M10 10C8 7 5 6.5 3.8 8.2C2.6 10 3.6 13 6.2 13C8 13 9 11.5 10 10C11 8.5 12 7 13.8 7C16.4 7 17.4 10 16.2 11.8C15 13.5 12 13 10 10Z" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>`,
+};
+
+/** スキル・パッシブ・アルティメットのアイコン。色は寄せ方（アルティメットは共通の色） */
+export function kitIcon(id: SkillId | PassiveId | UltId, size = 20): string {
+  const color = id in ULTS ? ULT_COLOR : STYLE_COLORS[(SKILLS[id as SkillId] ?? PASSIVES[id as PassiveId]).style];
+  return `<svg width="${size}" height="${size}" viewBox="0 0 20 20" aria-hidden="true">${KIT_BODIES[id](color)}</svg>`;
 }

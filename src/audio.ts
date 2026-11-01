@@ -132,6 +132,12 @@ export class Sfx {
         case "pickup":
           this.tone([700, 1050], 0.05, 0.1);
           break;
+        case "skill":
+          if (ev.actor === p.id) this.tone([600, 900, 1200], 0.05, 0.14, "triangle");
+          break;
+        case "barrierBreak":
+          this.burst(0.3, 700, near(ev.pos, 50) * 0.5, 1);
+          break;
         case "extractCall":
           this.tone([520, 780, 520, 780], 0.12, 0.2, "square");
           break;

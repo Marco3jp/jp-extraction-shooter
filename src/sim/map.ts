@@ -112,6 +112,8 @@ export class GameMap {
   /** セルごとの建物の番号（json.buildings の添字）。建物でなければ -1 */
   readonly buildingIndex: Int32Array;
 
+  /** 読み込んだときの solid。遮蔽物のスキルで書き換えた分を、ランの始めに戻す */
+  private baseSolid: Uint8Array;
   /** 歩いて行けるセル（一番広くつながった範囲）。setReachMain するまでは null */
   reach: Uint8Array | null = null;
   private gScore: Float32Array;
@@ -128,6 +130,7 @@ export class GameMap {
     this.h = json.height;
     this.ground = decode(json.ground);
     this.solid = decode(json.solid);
+    this.baseSolid = this.solid.slice();
     const n = this.w * this.h;
     this.buildingIndex = new Int32Array(n).fill(-1);
     json.buildings.forEach((b, bi) => {
@@ -139,6 +142,10 @@ export class GameMap {
     this.came = new Int32Array(n);
     this.stamp = new Uint32Array(n);
     this.closed = new Uint32Array(n);
+  }
+
+  resetSolid() {
+    this.solid.set(this.baseSolid);
   }
 
   /** 一番近い町名。町名のデータが無ければ null */

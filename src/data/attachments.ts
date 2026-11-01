@@ -12,7 +12,7 @@ export const SLOTS: Record<SlotId, { name: string }> = {
 export const SLOT_ORDER = Object.keys(SLOTS) as SlotId[];
 
 /** add は足す量、mul は割合（0.3 で +30%）。同じ項目の修正は、加算を全部足してから (1 + 割合の合計) を掛ける */
-export type Modifier = { stat: WeaponStat; add?: number; mul?: number };
+export type Modifier<S extends string = WeaponStat> = { stat: S; add?: number; mul?: number };
 
 export type AttachmentId =
   | "longBarrel" | "shortBarrel" | "chokeBarrel"

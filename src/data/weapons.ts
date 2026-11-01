@@ -52,8 +52,8 @@ export const WEAPON_BASES: Record<WeaponType, WeaponBase> = {
     stats: S({ damage: 15, rate: 7.5, mag: 22, reload: 2.0, spreadBase: 1.0, spreadPerShot: 0.45, spreadMax: 5, spreadRecover: 8, spreadMoving: 1.5, bulletSpeed: 110, range: 45 }),
   },
   smg: {
-    type: "smg", name: "サブマシンガン", ammo: "smg", role: "火力が高い。弾薬のスタックが少ない",
-    stats: S({ damage: 11, rate: 10.5, mag: 28, reload: 1.7, spreadBase: 2.2, spreadPerShot: 0.5, spreadMax: 7, spreadRecover: 10, spreadMoving: 0.8, bulletSpeed: 90, range: 24 }),
+    type: "smg", name: "サブマシンガン", ammo: "smg", role: "火力が高い。反動が強く、弾薬のスタックが少ない",
+    stats: S({ damage: 12.5, rate: 12.5, mag: 28, reload: 1.7, spreadBase: 2.2, spreadPerShot: 0.8, spreadMax: 7, spreadRecover: 10, spreadMoving: 0.8, bulletSpeed: 90, range: 24 }),
   },
   long: {
     type: "long", name: "遠距離武器", ammo: "long", role: "遠くから戦う。アタッチメントで連射寄りにも単発火力寄りにもなる",

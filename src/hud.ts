@@ -1,13 +1,14 @@
 import {
   EXTRACT_TIME, HEALS, HEALTH_MAX, ITEMS, ITEM_ORDER, LOOT_PANEL_RANGE, PLAYER_FACTION, RARITY_COLORS, SHIELD_PER_CELL,
-  DASH, THROWABLES, factionDef, type HealKind, type ItemId, type ThrowableId,
+  DASH, OVERSHIELD, PASSIVES, SKILLS, THROWABLES, ULTS, factionDef, type HealKind, type ItemId, type ThrowableId,
 } from "./sim/data";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
 import { extractAt, nearestLoot, type Command } from "./sim/sim";
+import { nearRail } from "./sim/skills";
 import type { Actor, Extract, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
 import { MapView, type Ping } from "./mapview";
-import { itemIcon } from "./ui/icons";
+import { itemIcon, kitIcon } from "./ui/icons";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -101,6 +102,7 @@ export class Hud {
     dash.className = "item dash";
     dash.innerHTML = `<span class="key">Space</span><span class="name">ダッシュ</span><span class="count"></span><div class="cd"></div>`;
     items.appendChild(dash);
+    this.buildKit(world);
     const inv = $("#inventory");
     inv.addEventListener("mousedown", (e) => e.stopPropagation());
     inv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -121,7 +123,30 @@ export class Hud {
     });
   }
 
+  /** スキル・アルティメット・パッシブの表示。ランごとに持ち込むものが変わるので作り直す */
+  private buildKit(w: World) {
+    const items = $("#kit");
+    items.innerHTML = "";
+    const k = w.player.kit;
+    if (!k) return;
+    const tile = (cls: string, key: string, id: Parameters<typeof kitIcon>[0], name: string, title: string) => {
+      const d = document.createElement("div");
+      d.className = `item kit ${cls}`;
+      d.title = title;
+      d.innerHTML = `<span class="key">${key}</span><span class="ic">${kitIcon(id, 24)}</span><span class="name">${name}</span><span class="count"></span><div class="cd"></div>`;
+      items.appendChild(d);
+    };
+    tile("skill", "Q", k.skill, SKILLS[k.skill].name, SKILLS[k.skill].text);
+    tile("ult", "F", k.ult, ULTS[k.ult].name, ULTS[k.ult].text);
+    const pd = document.createElement("div");
+    pd.className = "item kit passive";
+    pd.title = `${PASSIVES[k.passive].name}：${PASSIVES[k.passive].text}`;
+    pd.innerHTML = `<span class="ic">${kitIcon(k.passive, 20)}</span>`;
+    items.appendChild(pd);
+  }
+
   reset(world: World) {
+    this.buildKit(world);
     this.mapView = new MapView(world.map);
     this.pings = [];
     this.lastPing.clear();
@@ -162,6 +187,12 @@ export class Hud {
         case "pickup":
         case "notice":
           this.toast(ev.text);
+          break;
+        case "killShield":
+          if (ev.actor === p.id) this.toast(`シールド +${Math.round(ev.amount)}`);
+          break;
+        case "barrierBreak":
+          this.toast("壁が壊れた");
           break;
         case "lootOpened":
           this.panel = { open: true, lootId: ev.loot, byTab: false };
@@ -277,15 +308,24 @@ export class Hud {
 
     const shieldEl = $("#shield");
     const cellCount = Math.ceil(p.shieldMax / SHIELD_PER_CELL);
-    while (shieldEl.children.length < cellCount) shieldEl.appendChild(document.createElement("div"));
-    while (shieldEl.children.length > cellCount) shieldEl.lastElementChild!.remove();
-    shieldEl.style.gridTemplateColumns = `repeat(${cellCount}, 1fr)`;
-    for (let i = 0; i < cellCount; i++) {
-      const v = Math.max(0, Math.min(1, (p.shield - i * SHIELD_PER_CELL) / SHIELD_PER_CELL));
-      (shieldEl.children[i] as HTMLElement).style.setProperty("--fill", `${v * 100}%`);
+    // 追加シールドは、ふだんのシールドの右に色を変えて足す
+    const overCount = p.overshield > 0 ? Math.ceil(OVERSHIELD.amount / SHIELD_PER_CELL) : 0;
+    const total = cellCount + overCount;
+    while (shieldEl.children.length < total) shieldEl.appendChild(document.createElement("div"));
+    while (shieldEl.children.length > total) shieldEl.lastElementChild!.remove();
+    shieldEl.style.gridTemplateColumns = `repeat(${total}, 1fr)`;
+    for (let i = 0; i < total; i++) {
+      const over = i >= cellCount;
+      const have = over ? p.overshield : p.shield;
+      const j = over ? i - cellCount : i;
+      const v = Math.max(0, Math.min(1, (have - j * SHIELD_PER_CELL) / SHIELD_PER_CELL));
+      const el = shieldEl.children[i] as HTMLElement;
+      el.classList.toggle("over", over);
+      el.style.setProperty("--fill", `${v * 100}%`);
     }
     $("#health").style.setProperty("--fill", `${(p.health / HEALTH_MAX) * 100}%`);
-    $("#vitals-text").textContent = `${Math.ceil(p.shield)} / ${p.shieldMax}　${Math.ceil(p.health)} / ${HEALTH_MAX}`;
+    const overText = p.overshield > 0 ? `＋${Math.ceil(p.overshield)}` : "";
+    $("#vitals-text").textContent = `${Math.ceil(p.shield)}${overText} / ${p.shieldMax}　${Math.ceil(p.health)} / ${HEALTH_MAX}`;
 
     $("#weapons").innerHTML = p.weapons
       .map((ws, i) => {
@@ -298,10 +338,12 @@ export class Hud {
 
     for (const el of Array.from($("#items").children) as HTMLElement[]) {
       if (el.classList.contains("dash")) {
-        const ready = p.dashCd <= 0;
+        const ready = p.dashCharges > 0;
+        const full = p.dashCharges >= p.dashMax;
         el.classList.toggle("empty", !ready);
-        el.querySelector(".count")!.textContent = ready ? "使える" : `${p.dashCd.toFixed(1)}`;
-        (el.querySelector(".cd") as HTMLElement).style.width = `${(1 - p.dashCd / DASH.cooldown) * 100}%`;
+        const charges = p.dashMax > 1 ? ` ×${p.dashCharges}` : "";
+        el.querySelector(".count")!.textContent = ready && (full || p.dashMax > 1) ? `使える${charges}` : `${p.dashCd.toFixed(1)}`;
+        (el.querySelector(".cd") as HTMLElement).style.width = `${full ? 100 : (1 - p.dashCd / DASH.cooldown) * 100}%`;
         continue;
       }
       const n = bagCount(w.bag, el.dataset.item as ItemId);
@@ -309,6 +351,7 @@ export class Hud {
       el.classList.toggle("active", !!el.dataset.kind && p.heal?.kind === el.dataset.kind);
       el.querySelector(".count")!.textContent = `${n}`;
     }
+    for (const el of Array.from($("#kit").children) as HTMLElement[]) this.updateKitTile(el, w);
     $("#bag").textContent = `カバン ${bagUsed(w.bag)}/${w.bag.slots.length}　${yen(w.bag.money)}　[Tab] 持ち物　[M] 地図`;
 
     const heal = $("#heal");
@@ -330,6 +373,8 @@ export class Hud {
       promptHtml = `脱出中… ${(EXTRACT_TIME - inExtract.progress).toFixed(1)}秒`;
     } else if (inExtract && !loot && inExtract.readyAt === null) {
       promptHtml = "[E] 脱出の迎えを呼ぶ（音で近くの敵が寄ってくる）";
+    } else if (!loot && p.alive && !p.ride && nearRail(w, p)) {
+      promptHtml = "[E] レールに乗る";
     } else if (loot && !this.panel.open) {
       if (loot.kind === "ground") {
         const s = loot.items[0];
@@ -398,6 +443,19 @@ export class Hud {
     this.updateTags(w, r);
     this.updateDmgStacks(w, r);
     this.updateAreaBanner(w, dt);
+  }
+
+  private updateKitTile(el: HTMLElement, w: World) {
+    const k = w.player.kit;
+    if (!k || el.classList.contains("passive")) return;
+    const ult = el.classList.contains("ult");
+    const cd = ult ? k.ultCd : k.skillCd;
+    const active = ult ? k.ultT : k.skillT;
+    const max = ult ? ULTS[k.ult].cooldown : SKILLS[k.skill].cooldown;
+    el.classList.toggle("on", active > 0);
+    el.classList.toggle("empty", cd > 0 && active <= 0);
+    el.querySelector(".count")!.textContent = active > 0 ? `残り${active.toFixed(1)}` : cd > 0 ? `${Math.ceil(cd)}` : "使える";
+    (el.querySelector(".cd") as HTMLElement).style.width = `${(1 - cd / max) * 100}%`;
   }
 
   private updatePanel(w: World) {

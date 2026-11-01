@@ -1,4 +1,4 @@
-import { BEACON_RADIUS, EXTRACT_RADIUS, factionDef } from "./sim/data";
+import { BEACON_RADIUS, EXTRACT_RADIUS, HEAL_SENSE, factionDef } from "./sim/data";
 import { Solid, type GameMap, type Vec } from "./sim/map";
 import type { Actor, Extract, World } from "./sim/world";
 import { TYPE_COLORS, extractColor } from "./render/renderer";
@@ -97,6 +97,31 @@ export class MapView {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(s.x, s.y, Math.max(3, (3 + k * 10) * (mini ? 1 : 1.4)), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#9ab8d0";
+    for (const b of w.barriers) {
+      for (const c of b.cells) {
+        const s = toS({ x: c % this.map.w, y: Math.floor(c / this.map.w) });
+        ctx.fillRect(s.x, s.y, Math.max(2, scale), Math.max(2, scale));
+      }
+    }
+    ctx.strokeStyle = "rgba(128, 232, 255, 0.8)";
+    ctx.lineWidth = 2;
+    for (const r of w.rails) {
+      const a = toS(r.a), b = toS(r.b);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(80, 224, 112, 0.85)";
+    ctx.lineWidth = 1.5;
+    for (const m of w.healMarks) {
+      const s = toS(m.pos);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, Math.max(4, HEAL_SENSE.radius * scale), 0, Math.PI * 2);
       ctx.stroke();
     }
 

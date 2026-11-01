@@ -7,7 +7,7 @@ import { Solid, type GameMap, type Vec } from "../sim/map";
 import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, hash } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
-import { DT, FRAG, THERMITE, type ThrowableId } from "../sim/data";
+import { BARRIER, DT, FRAG, HEAL_SENSE, THERMITE, type ThrowableId } from "../sim/data";
 import type { Actor, Extract, GameEvent, Loot, World } from "../sim/world";
 
 const CAM_OFFSET = new THREE.Vector3(0, 56, 36);
@@ -167,6 +167,11 @@ export class Renderer {
   private shockwaves: { mesh: THREE.Mesh; life: number; radius: number }[] = [];
   private throwRing!: THREE.Mesh;
   private throwLine!: THREE.Mesh;
+  private barrierMesh!: THREE.InstancedMesh;
+  private barrierGhost!: THREE.InstancedMesh;
+  private railMesh!: THREE.InstancedMesh;
+  private healMarkMesh!: THREE.InstancedMesh;
+  private overshieldRing!: THREE.Mesh;
 
   constructor(container: HTMLElement, map: GameMap) {
     this.gl = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -279,6 +284,39 @@ export class Renderer {
     this.throwLine.renderOrder = 30;
     this.scene.add(this.throwRing, this.throwLine);
 
+    this.barrierMesh = instanced(
+      new THREE.BoxGeometry(0.96, BARRIER.height, 0.96).translate(0, BARRIER.height / 2, 0),
+      new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
+      64,
+    );
+    // 建物の向こうに立てても見えるように、隠れた所だけ薄く重ねて描く
+    this.barrierGhost = new THREE.InstancedMesh(
+      this.barrierMesh.geometry,
+      new THREE.MeshBasicMaterial({ color: 0x9ad8ff, transparent: true, opacity: 0.3, depthWrite: false, depthFunc: THREE.GreaterDepth }),
+      64,
+    );
+    this.barrierGhost.instanceMatrix = this.barrierMesh.instanceMatrix;
+    this.barrierGhost.frustumCulled = false;
+    this.barrierGhost.count = 0;
+    this.barrierGhost.renderOrder = 18;
+    this.railMesh = instanced(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x80e8ff, transparent: true, opacity: 0.55, depthWrite: false }),
+      16,
+    );
+    // 巻き検知の円は壁越しにも見せるので、建物に隠れないようにする
+    this.healMarkMesh = instanced(
+      new THREE.RingGeometry(0.94, 1, 64).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x50e070, transparent: true, opacity: 0.75, depthWrite: false, depthTest: false }),
+      32,
+    );
+    this.healMarkMesh.renderOrder = 25;
+    this.overshieldRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.62, 0.05, 6, 32).rotateX(Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffd040, transparent: true, opacity: 0.8 }),
+    );
+    this.scene.add(this.barrierMesh, this.barrierGhost, this.railMesh, this.healMarkMesh, this.overshieldRing);
+
     this.resize();
   }
 
@@ -367,6 +405,62 @@ export class Renderer {
       }
     }
     this.shockwaves = this.shockwaves.filter((sw) => sw.life > 0);
+  }
+
+  private renderSkillObjects(w: World, px: number, py: number) {
+    const col = new THREE.Color();
+    let bi = 0;
+    for (const b of w.barriers) {
+      const k = Math.max(0, b.hp / BARRIER.hp);
+      for (const c of b.cells) {
+        if (bi >= 64) break;
+        this.dummy.position.set((c % w.map.w) + 0.5, 0, Math.floor(c / w.map.w) + 0.5);
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(1);
+        this.dummy.updateMatrix();
+        this.barrierMesh.setMatrixAt(bi, this.dummy.matrix);
+        // 耐久が減るほど赤くする
+        this.barrierMesh.setColorAt(bi, col.setRGB(0.55 + 0.4 * (1 - k), 0.62 * k + 0.25, 0.75 * k + 0.2));
+        bi++;
+      }
+    }
+    this.barrierMesh.count = bi;
+    this.barrierGhost.count = bi;
+    this.barrierMesh.instanceMatrix.needsUpdate = true;
+    if (this.barrierMesh.instanceColor) this.barrierMesh.instanceColor.needsUpdate = true;
+
+    let ri = 0;
+    for (const r of w.rails) {
+      if (ri >= 16) break;
+      const len = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
+      this.dummy.position.set((r.a.x + r.b.x) / 2, 0.08, (r.a.y + r.b.y) / 2);
+      this.dummy.rotation.set(0, -Math.atan2(r.b.y - r.a.y, r.b.x - r.a.x), 0);
+      this.dummy.scale.set(len, 1, 0.5);
+      this.dummy.updateMatrix();
+      this.railMesh.setMatrixAt(ri, this.dummy.matrix);
+      ri++;
+    }
+    this.dummy.scale.setScalar(1);
+    this.railMesh.count = ri;
+    this.railMesh.instanceMatrix.needsUpdate = true;
+
+    let hi = 0;
+    for (const m of w.healMarks) {
+      if (hi >= 32) break;
+      this.dummy.position.set(m.pos.x, 0.12, m.pos.y);
+      this.dummy.rotation.set(0, 0, 0);
+      this.dummy.scale.setScalar(HEAL_SENSE.radius);
+      this.dummy.updateMatrix();
+      this.healMarkMesh.setMatrixAt(hi, this.dummy.matrix);
+      hi++;
+    }
+    this.dummy.scale.setScalar(1);
+    this.healMarkMesh.count = hi;
+    this.healMarkMesh.instanceMatrix.needsUpdate = true;
+
+    const p = w.player;
+    this.overshieldRing.visible = p.alive && p.overshield > 0;
+    this.overshieldRing.position.set(px, 0.9 + Math.sin(this.time * 4) * 0.08, py);
   }
 
   private buildStructures(map: GameMap) {
@@ -547,6 +641,9 @@ export class Renderer {
           break;
         case "fireStart":
           this.spawnParticles({ x: (ev.a.x + ev.b.x) / 2, y: (ev.a.y + ev.b.y) / 2 }, 0.5, 30, 0xff8030, 6, 0.16, 0.6);
+          break;
+        case "barrierBreak":
+          this.spawnParticles(ev.pos, 0.8, 18, 0x9ab8d0, 5, 0.18, 0.7);
           break;
         case "dash":
           for (let k = 0; k < 6; k++) {
@@ -791,6 +888,7 @@ export class Renderer {
     this.syncLoot(w);
     this.renderThrowables(w, alpha, frameDt);
     this.renderThrowPreview(w, throwPreview, aim);
+    this.renderSkillObjects(w, px, py);
     this.animateLoot();
     const near = p.alive ? nearestLoot(w) : null;
     this.lootHighlight.visible = !!near;

@@ -3,10 +3,11 @@ import { DEATH_LOSES_RUN_LOOT, START_AMMO_MAGS, START_HEALS } from "../data/cons
 import { ARMORS, BAGS, SHOES, type ArmorId, type BagId, type ShoesId } from "../data/gear";
 import { ITEMS, MATERIALS, type ItemId, type MaterialId } from "../data/items";
 import { RECIPES, type Recipe } from "../data/recipes";
+import { PASSIVES, SKILLS, ULTS, type KitChoice, type PassiveId, type SkillId, type UltId } from "../data/skills";
 import { WEAPON_TYPES, type WeaponDef, type WeaponType } from "../data/weapons";
 import { computeWeapon } from "../sim/stats";
 
-export const PROFILE_VERSION = 1;
+export const PROFILE_VERSION = 2;
 
 /** ランの外で持ち続けるもの。保存の単位 */
 export type Profile = {
@@ -22,7 +23,7 @@ export type Profile = {
   armors: ArmorId[];
   bags: BagId[];
   shoes: ShoesId[];
-  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId };
+  loadout: { weapons: [WeaponType, WeaponType]; armor: ArmorId; bag: BagId; shoes: ShoesId } & KitChoice;
   stats: { runs: number; extractions: number; deaths: number; kills: number };
   /** ランを始める場所。null ならマップの出発地点から */
   camp: Camp | null;
@@ -44,7 +45,10 @@ export function defaultProfile(): Profile {
     armors: ["standard"],
     bags: ["standard"],
     shoes: ["standard"],
-    loadout: { weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard" },
+    loadout: {
+      weapons: ["ar", "pistol"], armor: "standard", bag: "standard", shoes: "standard",
+      skill: "overshield", passive: "killShield", ult: "barrier",
+    },
     stats: { runs: 0, extractions: 0, deaths: 0, kills: 0 },
     camp: null,
   };
@@ -62,6 +66,10 @@ export function normalizeProfile(p: Partial<Profile>): Profile {
     stats: { ...d.stats, ...(p.stats ?? {}) },
     version: PROFILE_VERSION,
   };
+  // スキルの名前を変えたり消したりしたときに、古いセーブが読めなくならないように
+  if (!(out.loadout.skill in SKILLS)) out.loadout.skill = d.loadout.skill;
+  if (!(out.loadout.passive in PASSIVES)) out.loadout.passive = d.loadout.passive;
+  if (!(out.loadout.ult in ULTS)) out.loadout.ult = d.loadout.ult;
   return out;
 }
 
@@ -133,6 +141,19 @@ export function setLoadoutShoes(p: Profile, shoes: ShoesId): boolean {
   return true;
 }
 
+/** スキルは最初から全部選べる */
+export function setLoadoutSkill(p: Profile, id: SkillId) {
+  p.loadout.skill = id;
+}
+
+export function setLoadoutPassive(p: Profile, id: PassiveId) {
+  p.loadout.passive = id;
+}
+
+export function setLoadoutUlt(p: Profile, id: UltId) {
+  p.loadout.ult = id;
+}
+
 // ---- クラフト ----
 
 /** 作れない理由。作れるなら null */
@@ -176,6 +197,9 @@ export function campOn(p: Profile, map: string): { x: number; y: number } | null
 /** ランに持ち込むもの。ゲームの計算はこれだけを見る */
 export type RunLoadout = {
   weapons: WeaponDef[];
+  /** ラン中に修正が変わったときに、武器の性能を計算し直すのに使う */
+  builds: { type: WeaponType; attachments: AttachmentId[] }[];
+  kit: KitChoice;
   shieldMax: number;
   moveMul: number;
   bagSlots: number;
@@ -187,8 +211,11 @@ export function makeRunLoadout(p: Profile): RunLoadout {
   const startItems: [ItemId, number][] = weapons.map((w) => [w.ammo, w.mag * START_AMMO_MAGS]);
   startItems.push(...START_HEALS);
   const armor = ARMORS[p.loadout.armor];
+  const { skill, passive, ult } = p.loadout;
   return {
     weapons,
+    builds: p.loadout.weapons.map((t) => ({ type: t, attachments: weaponAttachments(p, t) })),
+    kit: { skill, passive, ult },
     shieldMax: armor.shield,
     moveMul: armor.moveMul * SHOES[p.loadout.shoes].moveMul,
     bagSlots: BAGS[p.loadout.bag].slots,

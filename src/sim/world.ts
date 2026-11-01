@@ -2,10 +2,13 @@ import {
   BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, BUILDING_USE, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
   GROUND_ITEMS, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, ROAMING_GROUP_RATE, SOLO_COUNT,
   LOOT_TILT, SOLO_FACTION_BASE, SOLO_KINDS,
-  type AmmoId, type EnemyKind, type HealKind, type ItemId, type ThrowableId, type WeaponDef,
+  DASH, ENEMY_MIN_TTK, PASSIVES, ULT_START_READY, ULTS,
+  type ActorStats, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
+  type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
 } from "./data";
 import type { RunLoadout } from "../meta/profile";
 import { computeWeapon } from "./stats";
+import { refreshStats } from "./skills";
 import { bagAdd, makeBag, type Bag, type Stack } from "./inventory";
 import { GameMap, Solid, type Vec } from "./map";
 import { Rng } from "./rng";
@@ -43,6 +46,18 @@ export type Ai = {
   restT: number;
 };
 
+/** ラン中に足したり外したりする修正。until が null なら外すまで続く（パッシブ・バフアイテム） */
+export type ActorMod = { source: string; mods: StatMod[]; until: number | null };
+
+/** 修正をかける前の性能。これに mods を積み上げて、武器の性能・移動速度などを計算し直す */
+export type ActorBuild = {
+  weapons: { type: WeaponType; attachments: AttachmentId[] }[];
+  stats: ActorStats;
+};
+
+/** 持ち込んだスキル。Cd は次に使えるまで、T は効いている残り時間 */
+export type Kit = KitChoice & { skillCd: number; skillT: number; ultCd: number; ultT: number };
+
 export type Actor = {
   id: number;
   team: "player" | "enemy";
@@ -60,6 +75,15 @@ export type Actor = {
   health: number;
   /** 防具の重さなどによる移動速度の倍率 */
   moveMul: number;
+  /** シールドより先に減る追加シールドと、消えるまでの残り時間 */
+  overshield: number;
+  overshieldT: number;
+  /** 倒したときに回復するシールドの量 */
+  killShield: number;
+  /** null なら修正をかけない（敵） */
+  build: ActorBuild | null;
+  mods: ActorMod[];
+  kit: Kit | null;
   weapons: WeaponState[];
   cur: number;
   swapT: number;
@@ -69,10 +93,17 @@ export type Actor = {
   readyT: number;
   bloom: number;
   sprinting: boolean;
-  /** ダッシュの残り時間・次に使えるまでの時間・向き */
+  /** ダッシュの残り時間・向き・速さ。dashSteer なら進む間に移動キーの向きへ曲がる */
   dashT: number;
-  dashCd: number;
   dashDir: Vec;
+  dashSpeed: number;
+  dashSteer: boolean;
+  /** 溜まっているダッシュの回数・上限・次の1回が溜まるまでの時間 */
+  dashCharges: number;
+  dashMax: number;
+  dashCd: number;
+  /** 乗っているレール。dir が 1 なら a→b、-1 なら b→a へ進む */
+  ride: { rail: number; dir: 1 | -1 } | null;
   /** テルミットの炎で足が遅くなっている残り時間 */
   burnT: number;
   heal: Heal | null;
@@ -81,6 +112,8 @@ export type Actor = {
   info: number;
   /** 自分の視線が通っているか（敵のみ） */
   seen: boolean;
+  /** 広域探知で、この時刻まで段階3で見える（敵のみ） */
+  revealUntil: number;
   /** 倒されたときに落とす持ち物（敵のみ） */
   carry: Stack[];
   ai: Ai | null;
@@ -121,6 +154,14 @@ export type Fire = {
   tickT: number;
 };
 
+/** 遮蔽物のスキルで立てた壁。cells は map.solid の添字 */
+export type Barrier = { id: number; owner: number; cells: number[]; hp: number; until: number };
+
+export type Rail = { id: number; owner: number; a: Vec; b: Vec; until: number };
+
+/** 巻き検知の円。next の時刻に置き直す */
+export type HealMark = { actor: number; pos: Vec; next: number };
+
 export type LootKind = "ground" | "bin" | "deathbox";
 
 export type Loot = {
@@ -153,7 +194,10 @@ export type GameEvent =
   | { type: "fireStart"; a: Vec; b: Vec }
   | { type: "dash"; actor: number; pos: Vec; dir: Vec }
   | { type: "extractCall"; pos: Vec }
-  | { type: "extractReady"; pos: Vec };
+  | { type: "extractReady"; pos: Vec }
+  | { type: "skill"; actor: number; pos: Vec; id: SkillId | UltId }
+  | { type: "barrierBreak"; pos: Vec }
+  | { type: "killShield"; actor: number; amount: number };
 
 export type Outcome = "playing" | "dead" | "extracted";
 
@@ -177,6 +221,9 @@ export type World = {
   bullets: Bullet[];
   grenades: Grenade[];
   fires: Fire[];
+  barriers: Barrier[];
+  rails: Rail[];
+  healMarks: HealMark[];
   loot: Loot[];
   /** 箱や落ちている物が変わるたびに増える（描画の作り直し用） */
   lootVersion: number;
@@ -196,13 +243,17 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
     radius: 0.42,
     facing: 0, prevFacing: 0,
     shield: shieldMax, shieldMax, health: HEALTH_MAX, moveMul: 1,
+    overshield: 0, overshieldT: 0, killShield: 0,
+    build: null, mods: [], kit: null,
     weapons: weapons.map((def) => ({ def, mag: def.mag })),
     cur: 0, swapT: 0, reloadT: 0, fireCd: 0, readyT: 0, bloom: 0,
     sprinting: false,
-    dashT: 0, dashCd: 0, dashDir: { x: 0, y: 0 },
+    dashT: 0, dashDir: { x: 0, y: 0 }, dashSpeed: 0, dashSteer: false,
+    dashCharges: 1, dashMax: 1, dashCd: 0,
+    ride: null,
     burnT: 0,
     heal: null, alive: true,
-    info: 0, seen: false,
+    info: 0, seen: false, revealUntil: 0,
     carry: [],
     ai: null,
   };
@@ -233,7 +284,7 @@ function enemyWeapon(kind: EnemyKind): WeaponDef {
   let w = enemyWeapons.get(kind);
   if (!w) {
     const spec = ENEMY[kind].weapon;
-    const base = computeWeapon(spec.type, spec.attachments);
+    const base = computeWeapon(spec.type, spec.attachments, [], ENEMY_MIN_TTK);
     w = { ...base, bulletSpeed: base.bulletSpeed * ENEMY_BULLET_SPEED_MUL };
     enemyWeapons.set(kind, w);
   }
@@ -269,6 +320,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     throw new Error("空いている場所が見つからない");
   };
 
+  map.resetSolid();
   const layout = map.json.layout;
   map.setReachMain();
   const reach = map.reach!;
@@ -295,8 +347,19 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
 
   let nextId = 1;
   const player = makeActor(nextId++, "player", "player", PLAYER_FACTION, startPos, loadout.weapons, loadout.shieldMax);
-  player.moveMul = loadout.moveMul;
   player.facing = -Math.PI / 2;
+  player.build = {
+    weapons: loadout.builds,
+    stats: { moveMul: loadout.moveMul, shieldMax: loadout.shieldMax, dashCharges: DASH.charges, killShield: 0 },
+  };
+  const kit = loadout.kit;
+  player.kit = { ...kit, skillCd: 0, skillT: 0, ultCd: ULT_START_READY ? 0 : ULTS[kit.ult].cooldown, ultT: 0 };
+  const passive = PASSIVES[kit.passive].mods;
+  if (passive) player.mods.push({ source: `passive:${kit.passive}`, mods: passive, until: null });
+  refreshStats(player);
+  player.shield = player.shieldMax;
+  player.dashCharges = player.dashMax;
+  for (const ws of player.weapons) ws.mag = ws.def.mag;
   const preferAmmo = loadout.weapons.map((w) => w.ammo);
   const actors: Actor[] = [player];
 
@@ -426,7 +489,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     map, rng, seed,
     time: 0, tick: 0,
     actors, player,
-    bullets: [], grenades: [], fires: [], loot, lootVersion: 1, bag,
+    bullets: [], grenades: [], fires: [], barriers: [], rails: [], healMarks: [], loot, lootVersion: 1, bag,
     extracts,
     events: [],
     outcome: "playing",

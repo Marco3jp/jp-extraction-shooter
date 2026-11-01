@@ -1,12 +1,13 @@
 // 画面なしでゲームを回して、例外が出ないか、処理時間、敵どうしの撃ち合い、漁れる物の量を見る。
 // 使い方: npm run smoke
 import { readFileSync } from "node:fs";
-import { BUILDING_USE, DT, THERMITE } from "../src/sim/data";
+import { BARRIER, BUILDING_USE, DT, HEAL_SENSE, OVERSHIELD, SCAN, THERMITE, type KitChoice } from "../src/sim/data";
+import { applyDamage } from "../src/sim/combat";
 import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
 import { GameMap, type MapJson } from "../src/sim/map";
-import { emptyInput, nearestLoot, step } from "../src/sim/sim";
-import { createWorld } from "../src/sim/world";
+import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
+import { createWorld, type World } from "../src/sim/world";
 import { craft, defaultProfile, makeRunLoadout, setAttachment, setLoadoutWeapon, type Profile } from "../src/meta/profile";
 import type { WeaponType } from "../src/data/weapons";
 
@@ -137,15 +138,43 @@ for (const seed of [1, 2]) {
   }
 }
 
-// 武器ごとに、敵1人と正面 18m から撃ち合って勝てるか（撃ち返すだけで動かないボット）
+/** 敵1人と正面 18m から撃ち合う（撃ち返すだけで動かないボット）。置ける場所が無ければ null。each で毎ティックの入力を足せる */
+function duel(prof: Profile, seed: number, each?: (w: World, input: Input) => void): { win: boolean; time: number } | null {
+  const w = createWorld(map, seed, makeRunLoadout(prof));
+  if (w.player.kit) w.player.kit.ultCd = 0;
+  const e = w.actors.filter((a) => a.ai && a.ai.group === 0)[0];
+  for (const o of w.actors) if (o.ai && o !== e && Math.hypot(o.pos.x - e.pos.x, o.pos.y - e.pos.y) < 90) o.alive = false;
+  let placed = false;
+  for (let k = 0; k < 64 && !placed; k++) {
+    const a = (k / 64) * Math.PI * 2;
+    const q = { x: e.pos.x + Math.cos(a) * 18, y: e.pos.y + Math.sin(a) * 18 };
+    if (!map.blockedAt(q.x, q.y) && map.los(q, e.pos)) {
+      w.player.pos = { ...q };
+      placed = true;
+    }
+  }
+  if (!placed) return null;
+  for (let i = 0; i < 30 * 40 && w.outcome === "playing"; i++) {
+    const input = emptyInput();
+    input.aim = e.seen ? { ...e.pos } : { x: w.player.pos.x + 1, y: w.player.pos.y };
+    input.fire = e.alive && e.seen;
+    each?.(w, input);
+    step(w, input);
+    if (!e.alive) break;
+  }
+  return { win: w.player.alive && !e.alive, time: w.time };
+}
+
+const rich = (): Profile => {
+  const p = defaultProfile();
+  p.money = 1e6;
+  p.materials = { junk: 999, circuit: 999, precision: 999 };
+  for (const r of ["wpn-smg", "wpn-shotgun", "wpn-long"]) craft(p, r);
+  return p;
+};
+
+// 武器ごとに、敵1人と撃ち合って勝てるか
 {
-  const rich = (): Profile => {
-    const p = defaultProfile();
-    p.money = 1e6;
-    p.materials = { junk: 999, circuit: 999, precision: 999 };
-    for (const r of ["wpn-smg", "wpn-shotgun", "wpn-long"]) craft(p, r);
-    return p;
-  };
   const builds: [string, WeaponType, string[]][] = [
     ["アサルトライフル", "ar", []],
     ["サブマシンガン", "smg", []],
@@ -156,7 +185,7 @@ for (const seed of [1, 2]) {
     ["ピストル", "pistol", []],
   ];
   for (const [label, type, recipes] of builds) {
-    let wins = 0, total = 0, kills = 0;
+    let wins = 0, total = 0;
     for (let seed = 1; seed <= 12; seed++) {
       const prof = rich();
       setLoadoutWeapon(prof, 0, type);
@@ -166,34 +195,12 @@ for (const seed of [1, 2]) {
         const slot = id.endsWith("Receiver") ? "receiver" : id.endsWith("Mag") ? "magazine" : id.endsWith("Barrel") ? "barrel" : "stock";
         setAttachment(prof, type, slot, id);
       }
-      const w = createWorld(map, seed, makeRunLoadout(prof));
-      const e = w.actors.filter((a) => a.ai && a.ai.group === 0)[0];
-      for (const o of w.actors) if (o.ai && o !== e && Math.hypot(o.pos.x - e.pos.x, o.pos.y - e.pos.y) < 90) o.alive = false;
-      const group = [e];
-      let placed = false;
-      for (let k = 0; k < 64 && !placed; k++) {
-        const a = (k / 64) * Math.PI * 2;
-        const q = { x: e.pos.x + Math.cos(a) * 18, y: e.pos.y + Math.sin(a) * 18 };
-        if (!map.blockedAt(q.x, q.y) && group.every((o) => map.los(q, o.pos))) {
-          w.player.pos = { ...q };
-          placed = true;
-        }
-      }
-      if (!placed) continue;
+      const r = duel(prof, seed);
+      if (!r) continue;
       total++;
-      for (let i = 0; i < 30 * 40 && w.outcome === "playing"; i++) {
-        const input = emptyInput();
-        const t = w.actors.filter((a) => a.alive && a.ai && a.seen).sort((a, b) => Math.hypot(a.pos.x - w.player.pos.x, a.pos.y - w.player.pos.y) - Math.hypot(b.pos.x - w.player.pos.x, b.pos.y - w.player.pos.y))[0];
-        input.aim = t ? { ...t.pos } : { x: w.player.pos.x + 1, y: w.player.pos.y };
-        input.fire = !!t;
-        step(w, input);
-        if (group.every((a) => !a.alive)) break;
-      }
-      kills += group.filter((a) => !a.alive).length;
-      if (w.player.alive) wins++;
+      if (r.win) wins++;
     }
     console.log(`${label}: 1対1の勝ち ${wins}/${total}`);
-    void kills;
   }
 }
 
@@ -336,5 +343,193 @@ for (const seed of [1, 2]) {
   function bagAddForTest() {
     w.bag.slots[w.bag.slots.length - 1] = { item: "frag", count: 2 };
     w.bag.slots[w.bag.slots.length - 2] = { item: "thermite", count: 2 };
+  }
+}
+
+// スキル・パッシブ・アルティメット
+{
+  const withKit = (kit: Partial<KitChoice>, seed = 7) => {
+    const prof = defaultProfile();
+    Object.assign(prof.loadout, kit);
+    const w = createWorld(map, seed, makeRunLoadout(prof));
+    w.player.kit!.ultCd = 0;
+    for (const a of w.actors) if (a.ai) a.alive = false;
+    return w;
+  };
+  // 幅 1.5m で +x 方向に len だけまっすぐ歩ける場所。マップの左上から順に探すので毎回同じ所になる
+  const openLine = (len: number): Vec => {
+    for (let y = 20; y < map.h - 20; y += 3) {
+      for (let x = 20; x < map.w - 20 - len; x += 3) {
+        const q = { x: x + 0.5, y: y + 0.5 };
+        if (map.walkable(q.x, q.y) && map.walkable(q.x + len, q.y) && map.walkLine(q, { x: q.x + len, y: q.y }, 1.5)) return q;
+      }
+    }
+    throw new Error(`${len}m まっすぐ歩ける場所がない`);
+  };
+  const runFor = (w: World, ticks: number, f: (i: number) => Partial<Input>) => {
+    for (let i = 0; i < ticks; i++) step(w, { ...emptyInput(), aim: { x: w.player.pos.x + 10, y: w.player.pos.y }, ...f(i) });
+  };
+  const enemyAt = (w: World, pos: Vec) => {
+    const e = w.actors.find((a) => a.ai)!;
+    e.alive = true;
+    e.pos = { ...pos };
+    e.vel = { x: 0, y: 0 };
+    e.shield = 100;
+    e.health = 100;
+    return e;
+  };
+
+  // 受けたダメージと残りのシールド
+  {
+    const w = withKit({ skill: "overshield" });
+    const p = w.player;
+    runFor(w, 1, () => ({ skill: true }));
+    const over = p.overshield;
+    applyDamage(w, p, 80, undefined, p.pos);
+    const after = { over: p.overshield, shield: p.shield, health: p.health };
+    runFor(w, 30 * (OVERSHIELD.duration + 0.1), () => ({}));
+    const w2 = withKit({ passive: "killShield" });
+    const e = enemyAt(w2, { x: w2.player.pos.x + 5, y: w2.player.pos.y });
+    w2.player.shield = 0;
+    applyDamage(w2, e, 999, w2.player, e.pos);
+    console.log(
+      `シールド追加: 張った量 ${over}、80 ダメージを受けて 追加 ${after.over}・シールド ${after.shield}/${p.shieldMax}・ヘルス ${after.health}、${OVERSHIELD.duration}秒後の追加シールド ${p.overshield}　キルでシールド回復: 0 から ${w2.player.shield}`,
+    );
+  }
+
+  // 一定時間で進んだ距離
+  {
+    const q = openLine(60);
+    const go = (kit: Partial<KitChoice>, f: (i: number) => Partial<Input>) => {
+      const w = withKit(kit);
+      w.player.pos = { ...q };
+      runFor(w, 60, (i) => ({ move: { x: 1, y: 0 }, ...f(i) }));
+      return { x: w.player.pos.x - q.x, y: w.player.pos.y - q.y };
+    };
+    const walk = go({}, () => ({})).x;
+    const haste = go({ skill: "haste" }, (i) => ({ skill: i === 0 })).x;
+    const dash1 = go({}, (i) => ({ dash: i === 0 || i === 8 })).x;
+    const dash2 = go({ passive: "doubleDash" }, (i) => ({ dash: i === 0 || i === 8 })).x;
+    const slide = go({ skill: "slide" }, (i) => ({ skill: i === 0 })).x;
+    // 横滑りダッシュの途中で下（+y）へ曲げる
+    const turn = go({ skill: "slide" }, (i) => ({ skill: i === 0, move: i < 3 ? { x: 1, y: 0 } : { x: 0, y: 1 } }));
+    const rail = go({ ult: "rail" }, (i) => ({ ult: i === 0, move: { x: 0, y: 0 } })).x;
+    console.log(
+      `2秒で進んだ距離: 歩き ${walk.toFixed(1)}m、加速 ${haste.toFixed(1)}m、ダッシュ2回押し ${dash1.toFixed(1)}m（ダッシュ2回のパッシブ ${dash2.toFixed(1)}m）、横滑りダッシュ ${slide.toFixed(1)}m（途中で曲げると 横 ${turn.y.toFixed(1)}m）、レール ${rail.toFixed(1)}m`,
+    );
+  }
+
+  // 1対1 の勝ち数と、倒すまでの時間
+  {
+    const cases: [string, Partial<KitChoice>, boolean][] = [
+      ["スキルなし", { skill: "overshield", passive: "killShield" }, false],
+      ["速射", { skill: "rapidFire" }, true],
+      ["弾の威力", { passive: "damageUp" }, false],
+    ];
+    for (const [label, kit, use] of cases) {
+      let wins = 0, total = 0, time = 0;
+      for (let seed = 1; seed <= 12; seed++) {
+        const prof = rich();
+        Object.assign(prof.loadout, kit);
+        const r = duel(prof, seed, (_w, input) => {
+          if (use && input.fire) input.skill = true;
+        });
+        if (!r) continue;
+        total++;
+        if (r.win) {
+          wins++;
+          time += r.time;
+        }
+      }
+      console.log(`アサルトライフル ${label}: 1対1の勝ち ${wins}/${total} 倒すまで平均 ${(time / Math.max(wins, 1)).toFixed(2)}秒`);
+    }
+  }
+
+  // 置いた壁で弾が止まるか、敵が回り込むか、消えた後に元の格子に戻るか
+  {
+    const w = withKit({ ult: "barrier" });
+    const q = openLine(14);
+    const p = w.player;
+    p.pos = { ...q };
+    const r = { x: q.x + 12, y: q.y };
+    const e = enemyAt(w, r);
+    const before = w.map.solid.slice();
+    runFor(w, 1, () => ({ ult: true, aim: { x: q.x + 6, y: q.y } }));
+    const b = w.barriers[0];
+    const cells = b?.cells.length ?? 0;
+    for (let i = 0; i < 45; i++) {
+      e.pos = { ...r };
+      e.vel = { x: 0, y: 0 };
+      e.ai!.restT = 1;
+      step(w, { ...emptyInput(), aim: { ...r }, fire: true });
+    }
+    const enemyHp = e.shield + e.health;
+    const wallHp = b?.hp ?? 0;
+    e.ai!.state = "push";
+    e.ai!.stateT = 99;
+    e.ai!.target = p.id;
+    e.ai!.repathT = 0;
+    let closest = Infinity;
+    for (let i = 0; i < 30 * 6; i++) {
+      p.health = 100;
+      p.heal = { kind: "medLarge", t: 99, total: 99, items: 1 };
+      e.ai!.restT = 1;
+      step(w, { ...emptyInput(), aim: { ...e.pos } });
+      closest = Math.min(closest, Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y));
+    }
+    p.heal = null;
+    if (b) b.until = w.time;
+    step(w, { ...emptyInput(), aim: { ...e.pos } });
+    let diff = 0;
+    for (let i = 0; i < before.length; i++) if (before[i] !== w.map.solid[i]) diff++;
+    console.log(
+      `遮蔽物: 立てたマス ${cells}、1.5秒撃って 敵の体力 ${enemyHp}/200・壁の耐久 ${wallHp}/${BARRIER.hp}、壁の向こうから詰める敵が一番近づいた距離 ${closest.toFixed(1)}m、消えた後に元と違うマス ${diff}`,
+    );
+  }
+
+  // 巻き検知の円の中心が敵の位置と一致しないか。広域探知で見える段階
+  {
+    const w = withKit({ passive: "healSense", ult: "scan" });
+    const q = openLine(25);
+    w.player.pos = { ...q };
+    const e = enemyAt(w, { x: q.x + 20, y: q.y });
+    e.ai!.restT = 99;
+    let min = Infinity, max = 0, moves = 0, last: Vec | null = null;
+    for (let i = 0; i < 90; i++) {
+      e.heal = { kind: "medLarge", t: 99, total: 99, items: 1 };
+      e.pos = { x: q.x + 20, y: q.y };
+      e.vel = { x: 0, y: 0 };
+      step(w, { ...emptyInput(), aim: { x: q.x - 10, y: q.y } });
+      const m = w.healMarks[0];
+      if (!m) continue;
+      const d = Math.hypot(m.pos.x - e.pos.x, m.pos.y - e.pos.y);
+      min = Math.min(min, d);
+      max = Math.max(max, d);
+      if (!last || last.x !== m.pos.x || last.y !== m.pos.y) moves++;
+      last = { ...m.pos };
+    }
+    e.heal = null;
+    step(w, emptyInput());
+    const cleared = w.healMarks.length === 0;
+    // 視線で見える段階を1（影だけ）にして、広域探知で段階が上がるかを見る
+    w.debug.sightLevel = 1;
+    step(w, emptyInput());
+    const before = e.info;
+    step(w, { ...emptyInput(), ult: true });
+    const during = e.info;
+    for (let i = 0; i < 30 * (SCAN.duration + 0.2); i++) step(w, emptyInput());
+    console.log(
+      `巻き検知: 円の中心と敵の距離 ${min.toFixed(2)}〜${max.toFixed(2)}m（半径 ${HEAL_SENSE.radius}m）、3秒で置き直した回数 ${moves}、回復をやめたら消えるか ${cleared}　広域探知: 段階 ${before} → ${during} → ${SCAN.duration}秒後 ${e.info}`,
+    );
+  }
+
+  // 弾倉なし：マガジンが減らず、カバンの弾が減る
+  {
+    const w = withKit({ ult: "bottomless" });
+    const p = w.player;
+    const ws = p.weapons[p.cur];
+    const mag = ws.mag, bag = bagCount(w.bag, ws.def.ammo);
+    runFor(w, 30 * 3, (i) => ({ ult: i === 0, fire: true }));
+    console.log(`弾倉なし: 3秒撃って マガジン ${mag} → ${ws.mag}、カバンの弾 ${bag} → ${bagCount(w.bag, ws.def.ammo)}、リロードしていない ${p.reloadT === 0}`);
   }
 }

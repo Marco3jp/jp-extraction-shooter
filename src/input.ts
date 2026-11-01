@@ -39,7 +39,8 @@ export class InputState {
         case "KeyT": this.aimingThrow = "thermite"; break;
         case "Digit1": this.pending.swap = 0; break;
         case "Digit2": this.pending.swap = 1; break;
-        case "KeyQ": this.pending.swap = -1; break;
+        case "KeyQ": this.pending.skill = true; break;
+        case "KeyF": this.pending.ult = true; break;
         case "KeyX": this.pending.cancel = true; break;
         case "KeyE":
           if (!this.onInteract()) this.pending.interact = true;

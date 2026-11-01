@@ -1,7 +1,11 @@
 import { useState } from "preact/hooks";
 import { ATTACHMENT_IDS, ATTACHMENTS, SLOT_ORDER, SLOTS, type AttachmentId, type SlotId } from "../../data/attachments";
-import { MIN_TTK } from "../../data/constants";
+import { PLAYER_MIN_TTK } from "../../data/constants";
 import { ARMORS, BAGS, SHOES } from "../../data/gear";
+import {
+  PASSIVE_IDS, PASSIVES, SKILL_IDS, SKILLS, ULT_IDS, ULTS, type PassiveId, type SkillId, type UltId,
+} from "../../data/skills";
+import { kitIcon } from "../icons";
 import { WEAPON_BASES, type WeaponDef, type WeaponStat, type WeaponType } from "../../data/weapons";
 import {
   attachmentsFree,
@@ -9,7 +13,8 @@ import {
   profileWeapon,
   setAttachment,
   setLoadoutArmor,
-  setLoadoutBag, setLoadoutShoes,
+  setLoadoutBag, setLoadoutPassive, setLoadoutShoes,
+  setLoadoutSkill, setLoadoutUlt,
   setLoadoutWeapon,
   type Profile,
 } from "../../meta/profile";
@@ -137,6 +142,68 @@ export function Loadout({ profile, mapName, onChange, onDeploy }: Props) {
           <StatsTable weapon={target} current={profileWeapon(profile, target)} />
         </div>
       </section>
+
+      <section class="hub-panel hub-kit">
+        <h2>スキル</h2>
+        <KitPicker
+          label="スキル（Q）"
+          ids={SKILL_IDS}
+          current={profile.loadout.skill}
+          describe={(id: SkillId) => ({ name: SKILLS[id].name, style: SKILLS[id].style, text: SKILLS[id].text, cd: SKILLS[id].cooldown })}
+          onPick={(id) => update((p) => setLoadoutSkill(p, id))}
+        />
+        <KitPicker
+          label="パッシブ"
+          ids={PASSIVE_IDS}
+          current={profile.loadout.passive}
+          describe={(id: PassiveId) => ({ name: PASSIVES[id].name, style: PASSIVES[id].style, text: PASSIVES[id].text, cd: null })}
+          onPick={(id) => update((p) => setLoadoutPassive(p, id))}
+        />
+        <KitPicker
+          label="アルティメット（F）"
+          ids={ULT_IDS}
+          current={profile.loadout.ult}
+          describe={(id: UltId) => ({ name: ULTS[id].name, style: null, text: ULTS[id].text, cd: ULTS[id].cooldown })}
+          onPick={(id) => update((p) => setLoadoutUlt(p, id))}
+        />
+      </section>
+    </div>
+  );
+}
+
+function KitPicker<T extends SkillId | PassiveId | UltId>({
+  label,
+  ids,
+  current,
+  describe,
+  onPick,
+}: {
+  label: string;
+  ids: T[];
+  current: T;
+  describe: (id: T) => { name: string; style: string | null; text: string; cd: number | null };
+  onPick: (id: T) => void;
+}) {
+  return (
+    <div class="hub-slot">
+      <div class="hub-field-label">{label}</div>
+      <div class="hub-slot-options hub-kit-options">
+        {ids.map((id) => {
+          const d = describe(id);
+          return (
+            <button class={`hub-option${current === id ? " selected" : ""}`} onClick={() => onPick(id)}>
+              <span class="hub-kit-head">
+                <span class="hub-icon" dangerouslySetInnerHTML={{ __html: kitIcon(id, 22) }} />
+                <span class="hub-option-name">{d.name}</span>
+              </span>
+              <span class="hub-option-count">
+                {[d.style, d.cd !== null ? `クールダウン ${d.cd}秒` : null].filter(Boolean).join("・")}
+              </span>
+              <span class="hub-mods">{d.text}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -227,7 +294,7 @@ function StatsTable({ weapon, current }: { weapon: WeaponType; current: WeaponDe
         {current.style && <span class="hub-style">{current.style}</span>}
       </div>
       {current.rateClamped && (
-        <p class="hub-note">理論TTKが{MIN_TTK}秒を下回るため、連射速度を下げています</p>
+        <p class="hub-note">理論TTKが{PLAYER_MIN_TTK}秒を下回るため、連射速度を下げています</p>
       )}
       {!ttkNow.fitsMag && <p class="hub-note">マガジン1本では倒しきれません</p>}
       <table>

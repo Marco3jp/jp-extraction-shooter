@@ -1,6 +1,7 @@
 import { DT, HEALS, ITEMS, HEALTH_MAX, SWAP_TIME, THERMITE, type HealKind } from "./data";
 import { bagCount, bagRemove } from "./inventory";
 import type { Vec } from "./map";
+import { bottomlessOn, onKill } from "./skills";
 import type { Actor, World } from "./world";
 
 const DEG = Math.PI / 180;
@@ -25,7 +26,7 @@ export function isMoving(a: Actor): boolean {
 
 export function startReload(w: World, a: Actor): boolean {
   const ws = weapon(a);
-  if (a.reloadT > 0 || a.heal || a.swapT > 0) return false;
+  if (a.reloadT > 0 || a.heal || a.swapT > 0 || bottomlessOn(a)) return false;
   if (ws.mag >= ws.def.mag || reserve(w, a) <= 0) return false;
   a.reloadT = ws.def.reload;
   w.events.push({ type: "reloadStart", actor: a.id, pos: { ...a.pos } });
@@ -86,7 +87,6 @@ export function tickTimers(w: World, a: Actor) {
   a.bloom = Math.max(0, a.bloom - ws.def.spreadRecover * DT);
   if (a.swapT > 0) a.swapT = Math.max(0, a.swapT - DT);
   if (a.readyT > 0) a.readyT = Math.max(0, a.readyT - DT);
-  if (a.dashCd > 0) a.dashCd = Math.max(0, a.dashCd - DT);
   if (a.burnT > 0) a.burnT = Math.max(0, a.burnT - DT);
   if (a.reloadT > 0) {
     a.reloadT -= DT;
@@ -117,12 +117,15 @@ export function tickTimers(w: World, a: Actor) {
 export function pullTrigger(w: World, a: Actor, aimAngle: number, extraSpreadDeg = 0): boolean {
   const ws = weapon(a);
   if (a.heal || a.swapT > 0 || a.reloadT > 0 || a.readyT > 0) return false;
-  if (ws.mag <= 0) {
-    startReload(w, a);
+  // 弾倉なしの間は、マガジンの代わりにカバンの弾を減らす
+  const bottomless = bottomlessOn(a);
+  const loaded = () => (bottomless ? reserve(w, a) > 0 : ws.mag > 0);
+  if (!loaded()) {
+    if (!bottomless) startReload(w, a);
     return false;
   }
   let fired = false;
-  while (a.fireCd <= 0 && ws.mag > 0) {
+  while (a.fireCd <= 0 && loaded()) {
     const def = ws.def;
     const cone = (def.spreadBase + a.bloom + (isMoving(a) ? def.spreadMoving : 0) + extraSpreadDeg) * DEG;
     const center = aimAngle + (w.rng.next() + w.rng.next() - 1) * cone * 0.5;
@@ -139,7 +142,8 @@ export function pullTrigger(w: World, a: Actor, aimAngle: number, extraSpreadDeg
         life: def.range / def.bulletSpeed, alive: true,
       });
     }
-    ws.mag--;
+    if (bottomless) bagRemove(w.bag, def.ammo, 1);
+    else ws.mag--;
     a.bloom = Math.min(def.spreadMax - def.spreadBase, a.bloom + def.spreadPerShot);
     a.fireCd += 1 / def.rate;
     fired = true;
@@ -158,12 +162,15 @@ export function tickFireCd(a: Actor) {
 
 export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | undefined, at: Vec) {
   if (!target.alive) return;
+  const over = Math.min(target.overshield, dmg);
+  target.overshield -= over;
+  dmg -= over;
   const hadShield = target.shield > 0;
   const absorbed = Math.min(target.shield, dmg);
-  const amount = absorbed + Math.min(target.health, dmg - absorbed);
+  const amount = over + absorbed + Math.min(target.health, dmg - absorbed);
   target.shield -= absorbed;
   target.health -= dmg - absorbed;
-  w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: absorbed > 0, amount });
+  w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: over + absorbed > 0, amount });
   if (hadShield && target.shield <= 0) {
     w.events.push({ type: "shieldBreak", actor: target.id, pos: { ...target.pos } });
   }
@@ -172,7 +179,9 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
     target.alive = false;
     target.heal = null;
     target.reloadT = 0;
+    target.ride = null;
     w.events.push({ type: "death", actor: target.id, by: by?.id ?? 0, pos: { ...target.pos } });
+    if (by && by !== target) onKill(w, by);
     if (target.team === "enemy") {
       if (by?.team === "player") w.kills++;
       w.loot.push({

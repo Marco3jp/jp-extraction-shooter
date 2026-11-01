@@ -201,6 +201,20 @@
   gap: 16px;
   align-items: start;
 }
+.hub-kit {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hub-slot-options.hub-kit-options {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+.hub-kit-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .hub-field {
   display: flex;
   flex-direction: column;

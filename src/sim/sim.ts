@@ -4,8 +4,9 @@ import {
 } from "./combat";
 import {
   BEACON_RADIUS, DASH, DT, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
-  PICKUP_RANGE, RELOAD_MOVE_SPEED, SIGHT_RANGE, SPRINT_SPEED, SPRINT_TO_FIRE, type HealKind, type ItemId, type ThrowableId,
+  PICKUP_RANGE, RELOAD_MOVE_SPEED, SCAN, SIGHT_RANGE, SLIDE, SPRINT_SPEED, SPRINT_TO_FIRE, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
+import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
 import { bagAdd, sortBag } from "./inventory";
 import { throwGrenade, updateThrowables } from "./throwables";
 import type { Vec } from "./map";
@@ -30,13 +31,16 @@ export type Input = {
   interact: boolean;
   dash: boolean;
   throw: ThrowableId | null;
+  /** スキル（Q）とアルティメット（F） */
+  skill: boolean;
+  ult: boolean;
   commands: Command[];
 };
 
 export const emptyInput = (): Input => ({
   move: { x: 0, y: 0 }, aim: { x: 0, y: 0 },
   fire: false, sprint: false, reload: false, swap: null, heal: null, cancel: false, interact: false,
-  dash: false, throw: null,
+  dash: false, throw: null, skill: false, ult: false,
   commands: [],
 });
 
@@ -152,7 +156,9 @@ function updatePlayer(w: World, input: Input) {
       w.events.push({ type: "lootOpened", loot: l.id });
     } else {
       const ex = extractAt(w, p.pos);
+      const rail = p.ride ? null : nearRail(w, p);
       if (ex && ex.readyAt === null) callExtract(w, ex, p);
+      else if (rail) boardRail(p, rail);
     }
   }
 
@@ -167,18 +173,40 @@ function updatePlayer(w: World, input: Input) {
     my /= ml;
   }
 
-  if (input.dash && p.dashCd <= 0) {
+  if (input.skill) useSkill(w, p, input.aim, { x: mx, y: my });
+  if (input.ult) useUlt(w, p, input.aim);
+
+  if (input.dash && p.dashCharges > 0 && p.dashT <= 0) {
+    p.ride = null;
     // 動いていなければ狙っている向きへ
     p.dashDir = ml > 0 ? { x: mx, y: my } : { x: Math.cos(aimAng), y: Math.sin(aimAng) };
     p.dashT = DASH.time;
-    p.dashCd = DASH.cooldown;
+    p.dashSpeed = DASH.distance / DASH.time;
+    p.dashSteer = false;
+    if (p.dashCharges === p.dashMax) p.dashCd = DASH.cooldown;
+    p.dashCharges--;
     p.sprinting = false;
     if (p.heal) cancelHeal(w, p);
     w.events.push({ type: "dash", actor: p.id, pos: { ...p.pos }, dir: { ...p.dashDir } });
   }
+  if (p.ride && rideStep(w, p)) {
+    p.sprinting = false;
+    if (input.fire) pullTrigger(w, p, aimAng);
+    else releaseTrigger(p);
+    return;
+  }
   if (p.dashT > 0) {
     p.dashT -= DT;
-    const v = DASH.distance / DASH.time;
+    if (p.dashSteer && ml > 0) {
+      // 移動キーの向きへ、1ティックに曲がれる角度まで曲げる
+      const cur = Math.atan2(p.dashDir.y, p.dashDir.x);
+      let diff = Math.atan2(my, mx) - cur;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      const maxTurn = (SLIDE.turnRate * Math.PI / 180) * DT;
+      const next = cur + Math.max(-maxTurn, Math.min(maxTurn, diff));
+      p.dashDir = { x: Math.cos(next), y: Math.sin(next) };
+    }
+    const v = p.dashSpeed;
     p.vel.x = p.dashDir.x * v;
     p.vel.y = p.dashDir.y * v;
     if (p.dashT <= 0) {
@@ -270,6 +298,10 @@ function updateBullets(w: World, byId: Map<number, Actor>) {
         if (hitActor.ai && shooter) alert(w, hitActor, shooter.pos, shooter);
       } else {
         w.events.push({ type: "wallHit", pos: at });
+        // 当たった位置から少し進めた所が、塞がっているマス
+        const sp = Math.hypot(b.vel.x, b.vel.y) || 1;
+        const cx = Math.floor(at.x + (b.vel.x / sp) * 0.01), cy = Math.floor(at.y + (b.vel.y / sp) * 0.01);
+        if (w.barriers.length) hitBarrier(w, cx + cy * w.map.w, b.damage);
       }
       continue;
     }
@@ -307,6 +339,7 @@ function updateInfo(w: World) {
     e.seen = d <= SIGHT_RANGE && w.map.los(p.pos, e.pos);
     let level = e.seen ? w.debug.sightLevel : 0;
     if (d <= BEACON_RADIUS) level = Math.max(level, w.debug.beaconLevel);
+    if (w.time < e.revealUntil) level = Math.max(level, SCAN.level);
     e.info = level;
   }
 }
@@ -323,8 +356,10 @@ export function step(w: World, input: Input) {
     a.prevFacing = a.facing;
     if (!a.alive) continue;
     tickTimers(w, a);
+    tickSkills(w, a);
     tickFireCd(a);
   }
+  tickSkillObjects(w);
 
   updatePlayer(w, input);
   for (const a of w.actors) {
