@@ -90,10 +90,12 @@ export class Sfx {
     for (const ev of events) {
       switch (ev.type) {
         case "shot": {
-          if (shots++ > 3) break;
           const mine = ev.actor === p.id;
           const v = mine ? 0.5 : near(ev.pos, 60) * 0.3;
-          if (v > 0) this.burst(0.09, mine ? 1400 : 900, v, 0.8);
+          // 1ティックに鳴らす数は、聞こえる銃声だけで数える
+          if (v <= 0 || shots >= 4) break;
+          shots++;
+          this.burst(0.09, mine ? 1400 : 900, v, 0.8);
           break;
         }
         case "hit": {
@@ -128,10 +130,13 @@ export class Sfx {
           if (t?.team === "player") this.tone([880, 1320], 0.07, 0.12);
           break;
         }
-        case "death":
-          this.burst(0.4, 200, 0.5, 1);
-          if (byId.get(ev.actor)?.team === "partner") this.tone([660, 440, 330], 0.1, 0.2, "sawtooth");
+        case "death": {
+          const t = byId.get(ev.actor);
+          const v = t && t.team !== "enemy" ? 1 : near(ev.pos, 60);
+          if (v > 0) this.burst(0.4, 200, 0.5 * v, 1);
+          if (t?.team === "partner") this.tone([660, 440, 330], 0.1, 0.2, "sawtooth");
           break;
+        }
         case "revive":
           this.tone([440, 660, 880, 1100], 0.07, 0.16, "triangle");
           break;
@@ -166,9 +171,11 @@ export class Sfx {
         case "skill":
           if (ev.actor === p.id) this.tone([600, 900, 1200], 0.05, 0.14, "triangle");
           break;
-        case "barrierBreak":
-          this.burst(0.3, 700, near(ev.pos, 50) * 0.5, 1);
+        case "barrierBreak": {
+          const v = near(ev.pos, 50);
+          if (v > 0) this.burst(0.3, 700, v * 0.5, 1);
           break;
+        }
         case "extractCall":
           this.tone([520, 780, 520, 780], 0.12, 0.2, "square");
           break;
