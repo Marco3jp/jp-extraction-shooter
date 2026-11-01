@@ -1,7 +1,8 @@
 import { BEACON_RADIUS, EXTRACT_RADIUS, factionDef } from "./sim/data";
 import { Solid, type GameMap, type Vec } from "./sim/map";
 import type { Actor, World } from "./sim/world";
-import { GROUND_COLORS, TYPE_COLORS } from "./render/renderer";
+import { TYPE_COLORS } from "./render/renderer";
+import { GROUND_COLORS } from "./render/cityscape";
 
 export type Ping = { pos: Vec; t: number };
 

@@ -3,7 +3,7 @@ import { applyDamage, cancelHeal } from "./combat";
 import { DT, FRAG, THERMITE, THROW_TIME, THROWABLES, type ThrowableId } from "./data";
 import { bagCount, bagRemove } from "./inventory";
 import type { GameMap, Vec } from "./map";
-import type { Actor, World } from "./world";
+import type { Actor, Fire, World } from "./world";
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -82,6 +82,8 @@ function explode(w: World, at: Vec, owner: Actor | undefined) {
 function ignite(w: World, at: Vec, angle: number, owner: number) {
   const { a, b } = thermiteLine(w.map, at, angle);
   w.fires.push({ id: w.nextId++, owner, a, b, t: THERMITE.duration, tickT: 0 });
+  // 炎を避けた経路に引き直させる
+  for (const o of w.actors) if (o.ai) o.ai.repathT = 0;
   w.events.push({ type: "fireStart", a, b });
 }
 
@@ -90,6 +92,10 @@ function segDist(p: Vec, a: Vec, b: Vec) {
   const ll = dx * dx + dy * dy || 1e-9;
   const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / ll));
   return Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y);
+}
+
+function inFire(a: Actor, f: Fire) {
+  return segDist(a.pos, f.a, f.b) <= THERMITE.width / 2 + a.radius;
 }
 
 export function updateThrowables(w: World, byId: Map<number, Actor>) {
@@ -108,12 +114,15 @@ export function updateThrowables(w: World, byId: Map<number, Actor>) {
   for (const f of w.fires) {
     f.t -= DT;
     f.tickT -= DT;
+    for (const a of w.actors) {
+      if (a.alive && inFire(a, f)) a.burnT = THERMITE.slowLinger;
+    }
     if (f.tickT > 0) continue;
     f.tickT = THERMITE.tick;
     const owner = byId.get(f.owner);
     for (const a of w.actors) {
       if (!a.alive) continue;
-      if (segDist(a.pos, f.a, f.b) <= THERMITE.width / 2 + a.radius) {
+      if (inFire(a, f)) {
         applyDamage(w, a, THERMITE.dps * THERMITE.tick, owner, a.pos);
         if (a.ai && owner) alert(w, a, owner.pos, owner);
       }

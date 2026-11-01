@@ -60,11 +60,10 @@ export function factionDef(f: number): FactionDef {
   return FACTIONS[f] ?? SOLO_FACTION;
 }
 
-/** 配置する敵。area は地図上の範囲（0〜1）。勢力ごとに縄張りを分ける */
-export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][]; area: [number, number, number, number] }[] = [
+/** 配置する敵。縄張りはマップごとに決める（マップの JSON の layout.factionAreas） */
+export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][] }[] = [
   {
     faction: 1,
-    area: [0.0, 0.0, 0.5, 1.0],
     groups: [
       ["short", "mid", "long"],
       ["short", "long", "long"],
@@ -75,7 +74,6 @@ export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][]; area: [numb
   },
   {
     faction: 2,
-    area: [0.45, 0.0, 1.0, 0.75],
     groups: [
       ["short", "short", "mid", "long"],
       ["short", "short", "short"],

@@ -3,7 +3,8 @@ import {
   BEACON_RADIUS, EXTRACT_RADIUS, HEALS, ITEMS, PLAYER_FACTION, RARITY_COLORS, factionDef, type ItemCategory,
 } from "../sim/data";
 import { weapon, isMoving } from "../sim/combat";
-import { Ground, Solid, type GameMap, type Vec } from "../sim/map";
+import { Solid, type GameMap, type Vec } from "../sim/map";
+import { MeshBuilder, addBuilding, buildGround, buildRoadText, buildSigns, hash } from "./cityscape";
 import { nearestLoot } from "../sim/sim";
 import { grenadePos, thermiteLine, throwLanding } from "../sim/throwables";
 import { DT, FRAG, THERMITE, type ThrowableId } from "../sim/data";
@@ -11,21 +12,6 @@ import type { Actor, GameEvent, Loot, World } from "../sim/world";
 
 const CAM_OFFSET = new THREE.Vector3(0, 56, 36);
 const GUN_Y = 1.0;
-
-export const GROUND_COLORS: Record<number, [number, number, number]> = {
-  [Ground.lot]: [138, 136, 128],
-  [Ground.road]: [58, 60, 66],
-  [Ground.sidewalk]: [170, 165, 155],
-  [Ground.green]: [86, 128, 74],
-  [Ground.viaduct]: [92, 84, 76],
-  [Ground.dirt]: [150, 124, 92],
-};
-
-const KIND_COLORS: Record<string, number> = {
-  house: 0xd8c8a8, detached: 0xd8c8a8, residential: 0xc9c2b4, apartments: 0xb8c0c8,
-  commercial: 0xa8a8a8, retail: 0xc0a890, office: 0x98a8b8, hotel: 0xb0a0a0,
-  train_station: 0x9a9080, parking: 0x8a8a8a,
-};
 
 export const TYPE_COLORS = { short: 0xff8a3a, mid: 0x60d0c0, long: 0xb070ff };
 
@@ -123,11 +109,6 @@ type ActorView = {
 
 type Particle = { p: THREE.Vector3; v: THREE.Vector3; life: number; max: number; color: THREE.Color; size: number };
 
-function hash(n: number) {
-  const s = Math.sin(n * 127.1) * 43758.5453;
-  return s - Math.floor(s);
-}
-
 function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, max: number) {
   const m = new THREE.InstancedMesh(geo, mat, max);
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -192,7 +173,9 @@ export class Renderer {
     sun.position.set(-30, 60, 40);
     this.scene.add(sun);
 
-    this.buildGround(map);
+    this.scene.add(buildGround(map, this.gl.capabilities.getMaxAnisotropy()));
+    this.scene.add(buildSigns(map, CAM_OFFSET.clone().normalize()));
+    this.scene.add(buildRoadText(map));
     this.buildingMat = new THREE.ShaderMaterial({
       vertexShader: buildingVert,
       fragmentShader: buildingFrag,
@@ -390,75 +373,9 @@ export class Renderer {
     this.shockwaves = this.shockwaves.filter((sw) => sw.life > 0);
   }
 
-  private buildGround(map: GameMap) {
-    const S = 4;
-    const W = map.w * S, H = map.h * S;
-    const data = new Uint8Array(W * H * 4);
-    for (let ty = 0; ty < H; ty++) {
-      // DataTexture の行0は v=0（南端）に貼られるので、地図の行を南から詰める
-      const my = map.h - 1 - Math.floor(ty / S);
-      for (let tx = 0; tx < W; tx++) {
-        const mx = Math.floor(tx / S);
-        const g = map.ground[mx + my * map.w];
-        const c = GROUND_COLORS[g] ?? GROUND_COLORS[0];
-        const n = 0;
-        let edge = 0;
-        if (g === Ground.road) {
-          const i0 = mx + my * map.w;
-          const nb = [map.ground[i0 + 1], map.ground[i0 - 1], map.ground[i0 + map.w], map.ground[i0 - map.w]];
-          if (nb.some((v) => v !== undefined && v !== Ground.road)) edge = -8;
-        }
-        const i = (tx + ty * W) * 4;
-        data[i] = Math.max(0, Math.min(255, c[0] + n + edge));
-        data[i + 1] = Math.max(0, Math.min(255, c[1] + n + edge));
-        data[i + 2] = Math.max(0, Math.min(255, c[2] + n + edge));
-        data[i + 3] = 255;
-      }
-    }
-    const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
-    tex.magFilter = THREE.LinearFilter;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.generateMipmaps = true;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = this.gl.capabilities.getMaxAnisotropy();
-    tex.needsUpdate = true;
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(map.w, map.h), new THREE.MeshBasicMaterial({ map: tex }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(map.w / 2, 0, map.h / 2);
-    this.scene.add(ground);
-  }
-
   private buildStructures(map: GameMap) {
-    const pos: number[] = [], nor: number[] = [], col: number[] = [], idx: number[] = [];
-    const color = new THREE.Color();
-    const pushBox = (x: number, z: number, w: number, d: number, h: number, c: THREE.Color, roof: THREE.Color) => {
-      const x1 = x + w, z1 = z + d;
-      const faces: [number[][], number[], THREE.Color][] = [
-        [[[x, h, z1], [x1, h, z1], [x1, h, z], [x, h, z]], [0, 1, 0], roof],
-        [[[x, 0, z1], [x1, 0, z1], [x1, h, z1], [x, h, z1]], [0, 0, 1], c],
-        [[[x1, 0, z], [x, 0, z], [x, h, z], [x1, h, z]], [0, 0, -1], c],
-        [[[x1, 0, z1], [x1, 0, z], [x1, h, z], [x1, h, z1]], [1, 0, 0], c],
-        [[[x, 0, z], [x, 0, z1], [x, h, z1], [x, h, z]], [-1, 0, 0], c],
-      ];
-      for (const [verts, n, fc] of faces) {
-        const base = pos.length / 3;
-        for (const v of verts) {
-          pos.push(v[0], v[1], v[2]);
-          nor.push(n[0], n[1], n[2]);
-          col.push(fc.r, fc.g, fc.b);
-        }
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-      }
-    };
-
-    map.json.buildings.forEach((b, bi) => {
-      const h = Math.max(3, Math.min(8, b.h * 0.4));
-      color.setHex(KIND_COLORS[b.kind] ?? 0xb4aea4);
-      color.offsetHSL(0, 0, (hash(bi + 0.5) - 0.5) * 0.12);
-      const wall = color.clone().multiplyScalar(0.82);
-      const roof = color.clone().offsetHSL(0, -0.05, 0.04);
-      for (const [x, y, w, d] of b.rects) pushBox(x, y, w, d, h, wall, roof);
-    });
+    const mb = new MeshBuilder();
+    map.json.buildings.forEach((b, bi) => addBuilding(mb, b, bi));
 
     const carColors = [0xf0f0f0, 0x303438, 0xb02828, 0x2858a8, 0x909498, 0xe0c060];
     map.json.covers.forEach((c, ci) => {
@@ -475,14 +392,10 @@ export class Renderer {
         roofC = 0x303030;
       }
       const wc = new THREE.Color(cc);
-      pushBox(c.x + 0.05, c.y + 0.05, c.w - 0.1, c.h - 0.1, h, wc.clone().multiplyScalar(0.85), new THREE.Color(roofC ?? cc));
+      mb.box(c.x + 0.05, c.y + 0.05, c.w - 0.1, c.h - 0.1, 0, h, wc.clone().multiplyScalar(0.85), new THREE.Color(roofC ?? cc));
     });
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-    geo.setAttribute("aColor", new THREE.Float32BufferAttribute(col, 3));
-    geo.setIndex(idx);
+    const geo = mb.geometry();
     this.scene.add(new THREE.Mesh(geo, this.buildingMat));
   }
 

@@ -1,7 +1,8 @@
 // 画面なしでゲームを回して、例外が出ないか、処理時間、敵どうしの撃ち合い、漁れる物の量を見る。
 // 使い方: npm run smoke
 import { readFileSync } from "node:fs";
-import { DT } from "../src/sim/data";
+import { BUILDING_USE, DT, THERMITE } from "../src/sim/data";
+import type { Vec } from "../src/sim/map";
 import { bagCount, bagUsed } from "../src/sim/inventory";
 import { GameMap, type MapJson } from "../src/sim/map";
 import { emptyInput, nearestLoot, step } from "../src/sim/sim";
@@ -31,6 +32,20 @@ const map = new GameMap(json);
     byFaction.set(k, (byFaction.get(k) ?? 0) + 1);
   }
   console.log(`箱 ${bins.length}個（山 ${bins.length * 4}）　地面 ${ground.length}山　敵 ${enemies.length}人`, Object.fromEntries(byFaction));
+  const byUse = new Map<string, number>();
+  for (const b of bins) {
+    const cx = Math.floor(b.pos.x), cy = Math.floor(b.pos.y);
+    let use = "接していない";
+    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      const bi = map.buildingIndex[cx + dx + (cy + dy) * map.w];
+      if (bi >= 0) {
+        use = BUILDING_USE[map.json.buildings[bi].type];
+        break;
+      }
+    }
+    byUse.set(use, (byUse.get(use) ?? 0) + 1);
+  }
+  console.log("箱が接している建物の用途", Object.fromEntries(byUse));
 }
 
 // プレイヤーを置いたまま3分回し、敵どうしで何人倒れるか
@@ -189,6 +204,91 @@ for (const seed of [1, 2]) {
   const afterFire = e.alive ? e.shield + e.health : 0;
   console.log(`グレネード: 10m 先の敵に ${(before - afterFrag).toFixed(0)} ダメージ`);
   console.log(`テルミット: 炎の長さ ${fireLen.toFixed(1)}m、3秒で ${(afterFrag - afterFire).toFixed(0)} ダメージ`);
+
+  // 炎の真ん中から投げた向き（+x）へ歩いて抜ける。炎の外で同じだけ歩いた距離と比べる
+  if (fire && w.fires.length) {
+    const walk = (from: Vec) => {
+      p.pos = { ...from };
+      p.vel = { x: 0, y: 0 };
+      p.health = p.shield = 100;
+      const hp = p.health + p.shield;
+      let out = -1;
+      for (let i = 0; i < 30; i++) {
+        const input = { ...emptyInput(), aim: { x: p.pos.x + 5, y: p.pos.y }, move: { x: 1, y: 0 } };
+        step(w, input);
+        if (out < 0 && p.burnT < THERMITE.slowLinger) out = (i + 1) * DT;
+      }
+      return { moved: p.pos.x - from.x, lost: hp - p.health - p.shield, out };
+    };
+    const mid = { x: (fire.a.x + fire.b.x) / 2, y: (fire.a.y + fire.b.y) / 2 };
+    const inside = walk(mid);
+    p.burnT = 0;
+    const outside = walk({ x: q.x, y: q.y });
+    console.log(`テルミットの減速: 1秒で炎の中から ${inside.moved.toFixed(2)}m（炎の外なら ${outside.moved.toFixed(2)}m）、抜けるまで ${inside.out.toFixed(2)}秒、${inside.lost.toFixed(0)} ダメージ`);
+  }
+
+  // 敵の足元に投げ物を落とし、着地してからは止めずに逃げてダメージが減るかを見る。プレイヤーの体力は毎ティック戻す
+  const free = (kind: "frag" | "thermite", playerHp: number) => {
+    w.grenades = [];
+    w.fires = [];
+    bagAddForTest();
+    p.pos = { ...q };
+    e.pos = { ...r };
+    e.vel = { x: 0, y: 0 };
+    e.alive = true;
+    e.burnT = 0;
+    e.shield = 100;
+    e.health = 100;
+    e.heal = null;
+    e.ai!.state = "engage";
+    e.ai!.target = p.id;
+    const hp = 200;
+    for (let i = 0; i < 120 && e.alive; i++) {
+      p.shield = 0;
+      p.health = playerHp;
+      // プレイヤーが倒れると狙いが外れるので撃たせない
+      e.ai!.restT = 1;
+      // 足元に落ちた状況にするため、着地するまでは動かさない
+      if (i === 0 || w.grenades.some((g) => g.t < g.flight)) {
+        e.pos = { ...r };
+        e.vel = { x: 0, y: 0 };
+      }
+      step(w, { ...emptyInput(), aim: i === 0 ? { ...r } : { ...e.pos }, throw: i === 0 ? kind : null });
+          }
+    return hp - (e.alive ? e.shield + e.health : 0);
+  };
+  console.log(`敵の回避: グレネードで ${free("frag", 100).toFixed(0)} ダメージ（動かなければ ${(before - afterFrag).toFixed(0)}）、テルミット4秒で ${free("thermite", 100).toFixed(0)} ダメージ、相手が瀕死ならテルミット4秒で ${free("thermite", 30).toFixed(0)} ダメージ`);
+  // プレイヤーとの間に長さ6mの炎を置き、詰めてくる敵が回り込むかを見る
+  {
+    w.grenades = [];
+    const mid = { x: (q.x + r.x) / 2, y: (q.y + r.y) / 2 };
+    w.fires = [{ id: w.nextId++, owner: 0, a: { x: mid.x, y: mid.y - 3 }, b: { x: mid.x, y: mid.y + 3 }, t: 99, tickT: 99 }];
+    p.pos = { ...q };
+    e.pos = { ...r };
+    e.vel = { x: 0, y: 0 };
+    e.alive = true;
+    e.shield = e.health = 100;
+    e.ai!.state = "push";
+    e.ai!.stateT = 99;
+    e.ai!.target = p.id;
+    e.ai!.repathT = 0;
+    let inFire = 0, closest = Infinity;
+    for (let i = 0; i < 90; i++) {
+      p.health = 100;
+      p.heal = { kind: "medLarge", t: 99, total: 99, items: 1 };
+      e.ai!.restT = 1;
+      step(w, { ...emptyInput(), aim: { ...e.pos } });
+      if (Math.abs(e.pos.x - mid.x) <= THERMITE.width / 2 + e.radius && Math.abs(e.pos.y - mid.y) <= 3) inFire++;
+      closest = Math.min(closest, Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y));
+    }
+    p.heal = null;
+    console.log(`炎の回り込み: 炎の向こうから詰める敵が炎の中にいた時間 ${(inFire * DT).toFixed(2)}秒、プレイヤーに一番近づいた距離 ${closest.toFixed(1)}m`);
+  }
+  w.grenades = [];
+  w.fires = [];
+  p.burnT = 0;
+  p.pos = { ...q };
+  p.health = 100;
 
   e.alive = false;
   const start = { ...p.pos };

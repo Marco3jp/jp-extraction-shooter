@@ -8,8 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "ttk": "rolldown tools/ttk.ts -p node -o node_modules/.cache/ttk.mjs --log-level silent && node node_modules/.cache/ttk.mjs",
-    "map": "python3 -I tools/osm_to_map.py tools/osm-raw/area.json public/maps/akihabara.json",
-    "smoke": "rolldown tools/smoke.ts -p node -o node_modules/.cache/smoke.mjs --log-level silent && node node_modules/.cache/smoke.mjs"
+    "map": "python3 -I tools/osm_to_map.py",
+    "smoke": "rolldown tools/smoke.ts -p node -o node_modules/.cache/smoke.mjs --log-level silent && node node_modules/.cache/smoke.mjs",
+    "fetch-map": "python3 -I tools/fetch_osm.py"
   },
   "dependencies": {
     "preact": "^11.1.1",

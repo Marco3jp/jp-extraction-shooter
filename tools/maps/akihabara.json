@@ -1,0 +1,12 @@
+{
+  "name": "秋葉原・佐久間町",
+  "bbox": { "south": 35.6970, "west": 139.7736, "north": 35.7015, "east": 139.7800 },
+  "seed": 20261101,
+  "raw": "tools/osm-raw/area.json",
+  "out": "public/maps/akihabara.json",
+  "layout": {
+    "start": [0.55, 0.94],
+    "extracts": [[0.12, 0.1], [0.5, 0.06], [0.9, 0.1], [0.06, 0.5], [0.94, 0.5]],
+    "factionAreas": { "1": [0.0, 0.0, 0.5, 1.0], "2": [0.45, 0.0, 1.0, 0.75] }
+  }
+}

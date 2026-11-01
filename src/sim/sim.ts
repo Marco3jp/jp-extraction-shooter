@@ -1,6 +1,6 @@
 import { alert, hostile, updateEnemy } from "./ai";
 import {
-  applyDamage, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
+  applyDamage, burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, swapTo, tickFireCd, tickTimers,
 } from "./combat";
 import {
   BEACON_RADIUS, DASH, DT, EXTRACT_RADIUS, EXTRACT_TIME, HEAL_MOVE_SPEED, HEAR_RANGE, ITEMS, LOOT_PANEL_RANGE, MOVE_SPEED,
@@ -173,7 +173,7 @@ function updatePlayer(w: World, input: Input) {
   const wantSprint = input.sprint && ml > 0 && !p.heal && !input.fire;
   if (p.sprinting && !wantSprint) p.readyT = Math.max(p.readyT, SPRINT_TO_FIRE);
   p.sprinting = wantSprint;
-  const speed = (p.heal ? HEAL_MOVE_SPEED : p.sprinting ? SPRINT_SPEED : p.reloadT > 0 ? RELOAD_MOVE_SPEED : MOVE_SPEED) * p.moveMul;
+  const speed = (p.heal ? HEAL_MOVE_SPEED : p.sprinting ? SPRINT_SPEED : p.reloadT > 0 ? RELOAD_MOVE_SPEED : MOVE_SPEED) * p.moveMul * burnMul(p);
   const k = 1 - Math.exp(-DT * 16);
   p.vel.x += (mx * speed - p.vel.x) * k;
   p.vel.y += (my * speed - p.vel.y) * k;

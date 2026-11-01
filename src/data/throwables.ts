@@ -29,10 +29,13 @@ export const THERMITE = {
   /** 着地点から左右それぞれに伸びる長さ（壁で止まる） */
   halfLength: 6,
   /** 炎の幅（m） */
-  width: 1.4,
+  width: 2,
   duration: 6,
   /** 1秒あたりのダメージ */
   dps: 32,
+  /** 炎に触れている間と、離れてから slowLinger 秒の移動速度の倍率。ダッシュには効かない */
+  slowMul: 0.35,
+  slowLinger: 0.6,
   /** ダメージを与える間隔（秒） */
   tick: 0.25,
 };

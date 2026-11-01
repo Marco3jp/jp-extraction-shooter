@@ -2,3 +2,4 @@ node_modules
 dist
 tools/osm-raw
 .claude/ja-style-allow/
+__pycache__

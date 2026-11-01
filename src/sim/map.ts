@@ -1,5 +1,10 @@
+import type { BuildingType } from "../data/buildings";
+
 export const Ground = { lot: 0, road: 1, sidewalk: 2, green: 3, viaduct: 4, dirt: 5 } as const;
 export const Solid = { free: 0, building: 1, cover: 2 } as const;
+
+/** 地面に描く表示。座標はマップのセル単位、angle は道の伸びる向き（ラジアン） */
+export type Marking = { x: number; y: number; angle: number; len: number };
 
 export type MapJson = {
   name: string;
@@ -7,10 +12,34 @@ export type MapJson = {
   height: number;
   cell: number;
   attribution: string;
+  /** 位置はマップの幅・高さに対する割合（0〜1） */
+  layout: {
+    start: [number, number];
+    extracts: [number, number][];
+    /** 勢力の番号ごとの縄張り [左, 上, 右, 下] */
+    factionAreas: Record<string, [number, number, number, number]>;
+  };
   ground: string;
   solid: string;
-  buildings: { kind: string; h: number; rects: [number, number, number, number][] }[];
+  buildings: {
+    kind: string;
+    type: BuildingType;
+    h: number;
+    /** 道に面した側。0:北 1:東 2:南 3:西 */
+    front: 0 | 1 | 2 | 3;
+    rects: [number, number, number, number][];
+  }[];
   covers: { kind: string; x: number; y: number; w: number; h: number }[];
+  markings: {
+    crosswalks: Marking[];
+    stops: Marking[];
+    lines: { pts: [number, number][]; dash: boolean }[];
+    manholes: [number, number][];
+  };
+  /** street は通りの名前、station は駅名 */
+  signs: { kind: "street" | "station"; x: number; y: number; text: string[] }[];
+  /** 町名と、その中心 */
+  areas: { name: string; x: number; y: number }[];
 };
 
 function decode(b64: string): Uint8Array {
@@ -70,6 +99,9 @@ class MinHeap {
 
 export type Vec = { x: number; y: number };
 
+/** 通れるが避けたい場所。cellCost はそのセルに入るときに1歩あたりへ足す重み、lineOk はまっすぐ歩いてよい線分か */
+export type PathAvoid = { cellCost: (cx: number, cy: number) => number; lineOk: (a: Vec, b: Vec) => boolean };
+
 export class GameMap {
   readonly name: string;
   readonly w: number;
@@ -77,6 +109,8 @@ export class GameMap {
   readonly ground: Uint8Array;
   readonly solid: Uint8Array;
   readonly json: MapJson;
+  /** セルごとの建物の番号（json.buildings の添字）。建物でなければ -1 */
+  readonly buildingIndex: Int32Array;
 
   /** プレイヤーの出発地点から歩いて行けるセル。setReach するまでは null */
   reach: Uint8Array | null = null;
@@ -95,10 +129,30 @@ export class GameMap {
     this.ground = decode(json.ground);
     this.solid = decode(json.solid);
     const n = this.w * this.h;
+    this.buildingIndex = new Int32Array(n).fill(-1);
+    json.buildings.forEach((b, bi) => {
+      for (const [x, y, w, h] of b.rects) {
+        for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) this.buildingIndex[xx + yy * this.w] = bi;
+      }
+    });
     this.gScore = new Float32Array(n);
     this.came = new Int32Array(n);
     this.stamp = new Uint32Array(n);
     this.closed = new Uint32Array(n);
+  }
+
+  /** 一番近い町名。町名のデータが無ければ null */
+  areaAt(x: number, y: number): string | null {
+    let best: string | null = null;
+    let bd = Infinity;
+    for (const a of this.json.areas) {
+      const d = (a.x - x) ** 2 + (a.y - y) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = a.name;
+      }
+    }
+    return best;
   }
 
   blocked(cx: number, cy: number): boolean {
@@ -217,7 +271,7 @@ export class GameMap {
     return mark;
   }
 
-  findPath(a: Vec, b: Vec, maxNodes = 30000): Vec[] | null {
+  findPath(a: Vec, b: Vec, maxNodes = 30000, avoid?: PathAvoid): Vec[] | null {
     const w = this.w;
     const sx = Math.floor(a.x), sy = Math.floor(a.y);
     const tx = Math.floor(b.x), ty = Math.floor(b.y);
@@ -254,7 +308,7 @@ export class GameMap {
         if (dx !== 0 && dy !== 0 && (this.blocked(cx + dx, cy) || this.blocked(cx, cy + dy))) continue;
         const n = nx + ny * w;
         if (this.closed[n] === gen) continue;
-        const ng = g + cost;
+        const ng = g + cost * (1 + (avoid ? avoid.cellCost(nx, ny) : 0));
         if (this.stamp[n] === gen && this.gScore[n] <= ng) continue;
         this.stamp[n] = gen;
         this.gScore[n] = ng;
@@ -275,7 +329,7 @@ export class GameMap {
     let i = 0;
     while (i < cells.length) {
       let j = i;
-      while (j + 1 < cells.length && this.walkLine(anchor, cells[j + 1], 0.45)) j++;
+      while (j + 1 < cells.length && this.walkLine(anchor, cells[j + 1], 0.45) && (!avoid || avoid.lineOk(anchor, cells[j + 1]))) j++;
       out.push(cells[j]);
       anchor = cells[j];
       i = j + 1;

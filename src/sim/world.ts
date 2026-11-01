@@ -1,8 +1,8 @@
 import {
-  BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
+  BIN_CLUSTER_SIZE_WEIGHTS, BIN_CLUSTERS, BIN_ITEMS, BUILDING_USE, ENEMY, ENEMY_BULLET_SPEED_MUL, ENEMY_SHIELD, ENEMY_SPAWNS,
   GROUND_ITEMS, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, ROAMING_GROUP_RATE, SOLO_COUNT,
-  SOLO_FACTION_BASE, SOLO_KINDS,
-  type AmmoId, type EnemyKind, type HealKind, type ThrowableId, type WeaponDef,
+  LOOT_TILT, SOLO_FACTION_BASE, SOLO_KINDS,
+  type AmmoId, type EnemyKind, type HealKind, type ItemId, type ThrowableId, type WeaponDef,
 } from "./data";
 import type { RunLoadout } from "../meta/profile";
 import { computeWeapon } from "./stats";
@@ -73,6 +73,8 @@ export type Actor = {
   dashT: number;
   dashCd: number;
   dashDir: Vec;
+  /** テルミットの炎で足が遅くなっている残り時間 */
+  burnT: number;
   heal: Heal | null;
   alive: boolean;
   /** 情報の見え方の段階（敵のみ）。0:なし 1:影 2:影＋型 3:影＋型＋体力 */
@@ -133,7 +135,7 @@ export type Loot = {
 
 export type GameEvent =
   | { type: "shot"; actor: number; pos: Vec; faction: number }
-  | { type: "hit"; actor: number; by: number; pos: Vec; shield: boolean }
+  | { type: "hit"; actor: number; by: number; pos: Vec; shield: boolean; amount: number }
   | { type: "wallHit"; pos: Vec }
   | { type: "shieldBreak"; actor: number; pos: Vec }
   | { type: "reloadStart"; actor: number; pos: Vec }
@@ -187,6 +189,7 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
     cur: 0, swapT: 0, reloadT: 0, fireCd: 0, readyT: 0, bloom: 0,
     sprinting: false,
     dashT: 0, dashCd: 0, dashDir: { x: 0, y: 0 },
+    burnT: 0,
     heal: null, alive: true,
     info: 0, seen: false,
     carry: [],
@@ -194,12 +197,13 @@ function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction
   };
 }
 
-/** preferAmmo を渡すと、弾薬が出たときに一定の確率でその弾薬に置き換える */
-export function rollStack(rng: Rng, preferAmmo: AmmoId[] = []): Stack {
-  const total = LOOT_TABLE.reduce((a, t) => a + t.weight, 0);
+/** preferAmmo を渡すと、弾薬が出たときに一定の確率でその弾薬に置き換える。tilt は出やすさに掛ける倍率 */
+export function rollStack(rng: Rng, preferAmmo: AmmoId[] = [], tilt: Partial<Record<ItemId, number>> = {}): Stack {
+  const weight = (t: (typeof LOOT_TABLE)[number]) => t.weight * (tilt[t.item] ?? 1);
+  const total = LOOT_TABLE.reduce((a, t) => a + weight(t), 0);
   let r = rng.next() * total;
   for (const t of LOOT_TABLE) {
-    if ((r -= t.weight) < 0) {
+    if ((r -= weight(t)) < 0) {
       if (ITEMS[t.item].category === "ammo" && preferAmmo.length && rng.chance(LOOT_AMMO_BIAS)) {
         const want = rng.pick(preferAmmo);
         const wt = LOOT_TABLE.find((x) => x.item === want)!;
@@ -253,10 +257,12 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
     throw new Error("空いている場所が見つからない");
   };
 
-  const start = nearestFree(0.55, 0.94);
+  const layout = map.json.layout;
+  const start = nearestFree(...layout.start);
   map.setReach(start);
   const reach = map.reach!;
-  const extractPos = nearestFree(0.12, 0.1, reach);
+  const [efx, efy] = rng.pick(layout.extracts);
+  const extractPos = nearestFree(efx, efy, reach);
 
   const freeCells: number[] = [];
   const wallSideCells: number[] = [];
@@ -323,7 +329,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
   let groupId = 0;
   for (const spec of ENEMY_SPAWNS) {
     for (const members of spec.groups) {
-      const center = pickSpot(spec.area, 80, 45);
+      const center = pickSpot(layout.factionAreas[String(spec.faction)] ?? [0, 0, 1, 1], 80, 45);
       anchors.push(center);
       const gid = groupId++;
       const roam = rng.chance(ROAMING_GROUP_RATE);
@@ -348,6 +354,14 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
 
   const loot: Loot[] = [];
   const lootAt = (p: Vec, d: number) => loot.some((l) => dist(l.pos, p) < d);
+  /** 箱が接している建物の用途に合わせた、出やすさの倍率 */
+  const tiltAt = (i: number) => {
+    for (const n of [i - W, i + W, i - 1, i + 1]) {
+      const b = map.buildingIndex[n];
+      if (b >= 0) return LOOT_TILT[BUILDING_USE[map.json.buildings[b].type]] ?? {};
+    }
+    return {};
+  };
   const wallAngle = (i: number) => {
     if (map.solid[i - W] === Solid.building || map.solid[i + W] === Solid.building) return 0;
     return Math.PI / 2;
@@ -372,7 +386,8 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout): Wo
       const p = cellPos(i);
       if (lootAt(p, 1.6)) continue;
       const items: Stack[] = [];
-      for (let k = 0; k < BIN_ITEMS; k++) items.push(rollStack(rng, preferAmmo));
+      const tilt = tiltAt(i);
+      for (let k = 0; k < BIN_ITEMS; k++) items.push(rollStack(rng, preferAmmo, tilt));
       loot.push({ id: nextId++, pos: p, kind: "bin", items, opened: false, angle: wallAngle(i) });
       placed++;
     }

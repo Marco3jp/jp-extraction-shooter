@@ -4,7 +4,7 @@ import {
 } from "./sim/data";
 import { bagCount, bagUsed, type Stack } from "./sim/inventory";
 import { nearestLoot, type Command } from "./sim/sim";
-import type { GameEvent, Loot, World } from "./sim/world";
+import type { Actor, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
 import { MapView, type Ping } from "./mapview";
 import { itemIcon } from "./ui/icons";
@@ -26,6 +26,13 @@ const THROW_ORDER: [ThrowableId, string][] = [
 const LEVEL_NAMES = ["なし", "影", "影＋型", "影＋型＋体力"];
 const PING_RANGE = 160;
 const FEED_LIFE = 6;
+/** 撃った・撃たれてからこの秒数は戦闘中として、町名の表示を待たせる */
+const COMBAT_HOLD = 6;
+const AREA_BANNER_TIME = 3;
+/** 最後に当ててからこの秒数だけ、同じ相手へのダメージを足し続ける */
+const DMG_STACK_LIFE = 1.5;
+
+type DmgStack = { actor: number; total: number; shield: boolean; t: number; pos: { x: number; y: number }; el: HTMLDivElement };
 
 const hex = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
 const yen = (n: number) => `${n.toLocaleString("ja-JP")}円`;
@@ -57,6 +64,11 @@ export class Hud {
   private pings: Ping[] = [];
   private lastPing = new Map<number, number>();
   private feed: { text: string; t: number }[] = [];
+  private dmgStacks: DmgStack[] = [];
+  private lastCombatT = -Infinity;
+  /** 最後に「〜エリア」と出した町名 */
+  private shownArea: string | null = null;
+  private areaBannerT = 0;
   private mapView: MapView;
   private panelSig = "";
   private promptHtml = "";
@@ -114,6 +126,9 @@ export class Hud {
     this.pings = [];
     this.lastPing.clear();
     this.feed = [];
+    this.lastCombatT = -Infinity;
+    this.shownArea = null;
+    this.areaBannerT = 0;
     this.closePanel();
     this.bigMap = false;
   }
@@ -152,11 +167,16 @@ export class Hud {
           this.panel = { open: true, lootId: ev.loot, byTab: false };
           break;
         case "hit":
+          if (ev.by === p.id || ev.actor === p.id) this.lastCombatT = w.time;
           if (ev.by === p.id) {
             this.hitTimer = 0.15;
             $("#crosshair").classList.toggle("shield", ev.shield);
           }
           if (ev.actor === p.id) this.dmgTimer = 0.35;
+          else if (ev.by === p.id) {
+            const t = byId.get(ev.actor);
+            if (t && (t.seen || t.info >= 1)) this.stackDamage(w, t, ev.amount, ev.shield);
+          }
           break;
         case "shieldBreak": {
           const t = byId.get(ev.actor);
@@ -164,7 +184,10 @@ export class Hud {
           break;
         }
         case "shot": {
-          if (ev.faction === PLAYER_FACTION) break;
+          if (ev.faction === PLAYER_FACTION) {
+            this.lastCombatT = w.time;
+            break;
+          }
           const d = Math.hypot(ev.pos.x - p.pos.x, ev.pos.y - p.pos.y);
           const last = this.lastPing.get(ev.actor) ?? -10;
           if (d < PING_RANGE && w.time - last > 0.7) {
@@ -185,6 +208,58 @@ export class Hud {
       }
     }
     this.pings = this.pings.filter((pg) => w.time - pg.t < 3);
+  }
+
+  private stackDamage(w: World, target: Actor, amount: number, shield: boolean) {
+    let s = this.dmgStacks.find((d) => d.actor === target.id && w.time - d.t < DMG_STACK_LIFE);
+    if (!s) {
+      const el = document.createElement("div");
+      el.className = "dmgnum";
+      el.innerHTML = "<span></span>";
+      $("#dmgnums").appendChild(el);
+      s = { actor: target.id, total: 0, shield, t: w.time, pos: { ...target.pos }, el };
+      this.dmgStacks.push(s);
+    }
+    s.total += amount;
+    s.shield = shield;
+    s.t = w.time;
+    s.el.firstElementChild!.textContent = `${Math.round(s.total)}`;
+    s.el.classList.toggle("shield", shield);
+    // アニメーションを最初からやり直す
+    s.el.classList.remove("bump");
+    void s.el.offsetWidth;
+    s.el.classList.add("bump");
+  }
+
+  private updateDmgStacks(w: World, r: Renderer) {
+    const byId = new Map(w.actors.map((a) => [a.id, a]));
+    this.dmgStacks = this.dmgStacks.filter((s) => {
+      const age = w.time - s.t;
+      // 新しいランで時間が 0 に戻ったときも消す
+      if (age >= DMG_STACK_LIFE || age < 0) {
+        s.el.remove();
+        return false;
+      }
+      const a = byId.get(s.actor);
+      if (a?.alive) s.pos = { ...a.pos };
+      const sc = r.worldToScreen(s.pos.x, s.pos.y, 3);
+      s.el.style.display = sc.visible ? "block" : "none";
+      s.el.style.transform = `translate(${sc.x + 18}px, ${sc.y - 10}px)`;
+      s.el.style.opacity = age > DMG_STACK_LIFE - 0.3 ? "0" : "1";
+      return true;
+    });
+  }
+
+  private updateAreaBanner(w: World, dt: number) {
+    const el = $("#area-banner");
+    const area = w.map.areaAt(w.player.pos.x, w.player.pos.y);
+    if (area && area !== this.shownArea && w.time - this.lastCombatT > COMBAT_HOLD && w.player.alive) {
+      this.shownArea = area;
+      this.areaBannerT = AREA_BANNER_TIME;
+      el.textContent = `${area}エリア`;
+    }
+    this.areaBannerT -= dt;
+    el.classList.toggle("show", this.areaBannerT > 0);
   }
 
   private feedPush(text: string, w: World) {
@@ -255,11 +330,11 @@ export class Hud {
     } else if (loot && !this.panel.open) {
       if (loot.kind === "ground") {
         const s = loot.items[0];
-        promptHtml = `[F] 拾う：${itemIcon(s.item, 18)}<span style="color:${stackColor(s)}">${ITEMS[s.item].name} ${countText(s)}</span>`;
+        promptHtml = `[E] 拾う：${itemIcon(s.item, 18)}<span style="color:${stackColor(s)}">${ITEMS[s.item].name} ${countText(s)}</span>`;
       } else {
         promptHtml = loot.items.length
-          ? `[F] ${lootTitle(loot)}を開ける（${loot.items.length}個）`
-          : `[F] ${lootTitle(loot)}を開ける（空っぽ）`;
+          ? `[E] ${lootTitle(loot)}を開ける（${loot.items.length}個）`
+          : `[E] ${lootTitle(loot)}を開ける（空っぽ）`;
       }
     }
     if (promptHtml !== this.promptHtml) {
@@ -273,7 +348,10 @@ export class Hud {
 
     const ch = $("#crosshair");
     ch.style.transform = `translate(${mouse.x}px, ${mouse.y}px)`;
-    ch.style.display = this.blocksMouse ? "none" : "block";
+    // 持ち物の画面を開いていても、画面の外にカーソルがあるうちは照準を出す。撃てないので薄くする
+    const overUi = !!document.elementFromPoint(mouse.x, mouse.y)?.closest("#inventory, #bigmap");
+    ch.style.display = overUi ? "none" : "block";
+    ch.classList.toggle("idle", this.blocksMouse);
     this.hitTimer -= dt;
     ch.classList.toggle("hit", this.hitTimer > 0);
 
@@ -312,6 +390,8 @@ export class Hud {
 
     this.updatePanel(w);
     this.updateTags(w, r);
+    this.updateDmgStacks(w, r);
+    this.updateAreaBanner(w, dt);
   }
 
   private updatePanel(w: World) {
@@ -346,7 +426,7 @@ export class Hud {
         .map(({ s, i }) => `<button class="row" data-take="${i}" style="--c:${stackColor(s)}"><span class="ic">${itemIcon(s.item, 22)}</span><span class="nm">${ITEMS[s.item].name}</span><span class="ct">${countText(s)}</span></button>`)
         .join("");
       lootHtml = `<section class="loot"><h2>${lootTitle(loot)}</h2>${rows || `<p class="hint">空っぽ</p>`}
-        ${loot.items.length ? `<button class="takeall" data-takeall>全部取る [F]</button>` : ""}</section>`;
+        ${loot.items.length ? `<button class="takeall" data-takeall>全部取る [E]</button>` : ""}</section>`;
     }
     const slots = w.bag.slots
       .map((s, i) => s

@@ -4,19 +4,22 @@
 大通り・鉄道・公園・大きな建物は「残す場所」として、その縦横の比率を変えない。
 
 使い方:
-  python3 -I tools/osm_to_map.py tools/osm-raw/area.json public/maps/akihabara.json [preview.png]
+  python3 -I tools/osm_to_map.py tools/maps/akihabara.json [--preview preview.png]
 """
 import base64
 import json
 import math
+import os
 import random
+import re
 import struct
 import sys
 import zlib
 from collections import Counter
 
-BBOX = dict(south=35.6970, west=139.7736, north=35.7015, east=139.7800)
-SEED = 20261101
+# -I で起動するとスクリプトの置き場所が import の検索先から外れるので、tools/ だけを足す
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from buildings import ZONE_OF_LANDUSE, classify, clean_road_name, clean_station_name, is_station  # noqa: E402
 
 # 地面の種類。src/sim/map.ts の Ground と揃える
 LOT, ROAD, SIDEWALK, GREEN, VIADUCT, DIRT = 0, 1, 2, 3, 4, 5
@@ -59,10 +62,12 @@ def grid(w, h, v):
 
 
 def main():
-    src, dst = sys.argv[1], sys.argv[2]
-    preview = sys.argv[3] if len(sys.argv) > 3 else None
-    data = json.load(open(src))
-    elements = data["elements"]
+    cfg = json.load(open(sys.argv[1]))
+    preview = sys.argv[sys.argv.index("--preview") + 1] if "--preview" in sys.argv else None
+    BBOX = cfg["bbox"]
+    data = json.load(open(cfg["raw"]))
+    elements = [e for e in data["elements"] if e["type"] == "way"]
+    nodes = [e for e in data["elements"] if e["type"] == "node"]
 
     lat0 = (BBOX["south"] + BBOX["north"]) / 2
     mx = 111320 * math.cos(math.radians(lat0))
@@ -143,11 +148,17 @@ def main():
             row_keep[y] = True
 
     # ---- 1. 描き込む ----
+    zone = grid(W, H, None)
     for e in elements:
         t = e.get("tags", {})
         pts = [proj(p) for p in e.get("geometry", [])]
         if len(pts) < 3:
             continue
+        z = ZONE_OF_LANDUSE.get(t.get("landuse", ""))
+        if z:
+            def zf(x, y, z=z):
+                zone[y][x] = z
+            fill_poly(pts, zf)
         if t.get("leisure") in ("park", "playground") or t.get("landuse") in ("grass",):
             def g(x, y):
                 ground[y][x] = GREEN
@@ -180,20 +191,20 @@ def main():
             continue
         # 細い歩道や階段は模様にしかならないので描かない
         if hw in ROAD_WIDTH and ROAD_WIDTH[hw] > 0:
-            road_lines.append((hw, ROAD_WIDTH[hw], pts))
+            road_lines.append((hw, ROAD_WIDTH[hw], pts, clean_road_name(t.get("name"))))
         elif hw == "pedestrian":
             def s(x, y):
                 ground[y][x] = SIDEWALK
             for a, b in zip(pts, pts[1:]):
                 stroke_seg(a, b, 5, s)
 
-    for hw, w, pts in road_lines:
+    for hw, w, pts, _ in road_lines:
         def side(x, y):
             if ground[y][x] != ROAD:
                 ground[y][x] = SIDEWALK
         for a, b in zip(pts, pts[1:]):
             stroke_seg(a, b, w + 3, side)
-    for hw, w, pts in road_lines:
+    for hw, w, pts, _ in road_lines:
         kind = 2 if hw in MAJOR_ROADS else 1
         for a, b in zip(pts, pts[1:]):
             direction = VERT if abs(b[1] - a[1]) > abs(b[0] - a[0]) else HORIZ
@@ -222,17 +233,42 @@ def main():
                 cells.append((x, y))
 
         fill_poly(pts, mark)
-        levels = t.get("building:levels")
         try:
-            h = float(levels) * 3.2
+            levels = float(t.get("building:levels"))
+            h = levels * 3.2
         except (TypeError, ValueError):
+            levels = None
             h = {"house": 7, "detached": 7, "apartments": 14, "residential": 10,
                  "commercial": 16, "retail": 9, "office": 18, "hotel": 20}.get(b, 9)
-        buildings.append(dict(kind=b, h=h))
+        buildings.append(dict(
+            kind=b, h=h, tags=t, levels=levels, area=len(cells), pois=[],
+            cx=sum(p[0] for p in pts) / len(pts), cy=sum(p[1] for p in pts) / len(pts),
+        ))
         if cells and (len(cells) >= LANDMARK_BUILDING_AREA or (b == "train_station" and len(cells) >= LANDMARK_STATION_AREA)):
             xs = [c[0] for c in cells]
             ys = [c[1] for c in cells]
             keep_box(min(xs), min(ys), max(xs), max(ys))
+
+    # お店・施設の点を、その点がある建物に結び付ける。歩道に食い込んで建物から外れた点は近くの建物へ
+    for n in nodes:
+        x, y = proj(n)
+        found = -1
+        for r in range(4):
+            for j in range(-r, r + 1):
+                for i in range(-r, r + 1):
+                    xx, yy = int(x) + i, int(y) + j
+                    if found < 0 and 0 <= xx < W and 0 <= yy < H and bid[yy][xx] >= 0:
+                        found = bid[yy][xx]
+            if found >= 0:
+                break
+        if found >= 0:
+            buildings[found]["pois"].append(n.get("tags", {}))
+
+    def zone_at(x, y):
+        xi, yi = int(x), int(y)
+        return zone[yi][xi] if 0 <= xi < W and 0 <= yi < H else None
+
+    classify(buildings, zone_at)
 
     # ---- 2. ならす ----
     def is_open(x, y):
@@ -463,7 +499,7 @@ def main():
                 solid[y][x] = BUILDING
 
     # ---- 4. 遮蔽物 ----
-    rng = random.Random(SEED)
+    rng = random.Random(cfg["seed"])
     covers = []
 
     def place(x, y, w, h, kind):
@@ -538,26 +574,49 @@ def main():
                     done[yy][xx] = True
             rects_by_b.setdefault(b, []).append([x, y, w, h])
 
+    # 道に面した側。0:北 1:東 2:南 3:西
+    def front_of(b):
+        sides = [0, 0, 0, 0]
+        for x, y, w, h in rects_by_b[b]:
+            for yy in range(y, y + h):
+                for xx in range(x, x + w):
+                    for s, (dx, dy) in enumerate(((0, -1), (1, 0), (0, 1), (-1, 0))):
+                        nx, ny = xx + dx, yy + dy
+                        if 0 <= nx < W and 0 <= ny < H and bid[ny][nx] != b and ground[ny][nx] in (ROAD, SIDEWALK):
+                            sides[s] += 1
+        return max(range(4), key=lambda s: (sides[s], s == 2))
+
     out_b = []
     for b, rects in rects_by_b.items():
         bb = buildings[b]
-        out_b.append(dict(kind=bb["kind"], h=round(bb["h"], 1), rects=rects))
+        out_b.append(dict(kind=bb["kind"], type=bb["type"], h=round(bb["h"], 1), front=front_of(b), rects=rects))
+
+    features = place_features(
+        cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_lines, buildings, rects_by_b, nodes, proj,
+    )
 
     flat_ground = bytes(v for row in ground for v in row)
     flat_solid = bytes(v for row in solid for v in row)
     out = dict(
-        name="秋葉原・佐久間町",
+        name=cfg["name"],
         width=W, height=H, cell=1,
         attribution="© OpenStreetMap contributors (ODbL)",
+        layout=cfg["layout"],
         ground=base64.b64encode(flat_ground).decode(),
         solid=base64.b64encode(flat_solid).decode(),
         buildings=out_b,
         covers=covers,
+        **features,
     )
-    with open(dst, "w") as f:
+    with open(cfg["out"], "w") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+    types = Counter(b["type"] for b in out_b)
+    m = features["markings"]
     print(f"{W0}x{H0} → {W}x{H}（列 {len(cut_cols)}・行 {len(cut_rows)} を切り詰め）"
           f" buildings={len(out_b)} rects={sum(len(b['rects']) for b in out_b)} covers={len(covers)}")
+    print("建物の種類:", dict(types.most_common()))
+    print(f"横断歩道 {len(m['crosswalks'])} 停止線 {len(m['stops'])} 中央線 {len(m['lines'])} マンホール {len(m['manholes'])}"
+          f" 標識 {len(features['signs'])} 町名 {[a['name'] for a in features['areas']]}")
 
     if preview:
         colors = {LOT: (150, 150, 140), ROAD: (60, 60, 65), SIDEWALK: (185, 180, 170),
@@ -581,6 +640,209 @@ def main():
         png += chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
         open(preview, "wb").write(png)
 
+
+
+# 交差点の外側に横断歩道を描く道の幅（m）。これより細い道どうしの交差点には描かない
+CROSSWALK_ROAD = 9
+# 中央線を描く道の幅。SOLID_CENTER 以上は実線、それ未満は破線
+CENTER_LINE_ROAD = 9
+SOLID_CENTER = 14
+# 停止線と「止まれ」は、この幅以下の道が CROSSWALK_ROAD 以上の道に出る所に描く
+STOP_ROAD = 6
+MANHOLE_RATE = 1 / 220
+# 同じ通りの名前の標識どうしを、少なくともこれだけ離す（m）
+SIGN_SPACING = 70
+PLACE_KINDS = ("quarter", "neighbourhood", "suburb")
+# マップの外で町名の中心として採る距離（m）
+PLACE_MARGIN_M = 150
+# 私道や駐車場の通路に付いた名前は標識に出さない
+UNSIGNED_ROADS = {"service", "living_street"}
+
+
+def place_features(cfg, W0, H0, W, H, keep_cols, keep_rows, ground, solid, road_lines, buildings, rects_by_b, nodes, proj):
+    """地面の表示・標識・町名を、縮めた後の座標で返す"""
+    rng = random.Random(cfg["seed"] + 1)
+
+    def axis_map(keep, n0):
+        kept = set(keep)
+        before = [0] * (n0 + 1)
+        for i in range(n0):
+            before[i + 1] = before[i] + (1 if i in kept else 0)
+
+        def f(v):
+            i = min(n0 - 1, max(0, int(math.floor(v))))
+            return before[i] + ((v - i) if i in kept else 0.0)
+        return f
+
+    mx_, my_ = axis_map(keep_cols, W0), axis_map(keep_rows, H0)
+
+    def mp(p):
+        return (mx_(p[0]), my_(p[1]))
+
+    def ground_at(p):
+        x, y = int(p[0]), int(p[1])
+        return ground[y][x] if 0 <= x < W and 0 <= y < H else None
+
+    def free_walk(p):
+        x, y = int(p[0]), int(p[1])
+        return 0 <= x < W and 0 <= y < H and solid[y][x] == FREE and ground[y][x] in (SIDEWALK, LOT)
+
+    def mapped_angle(p, u):
+        a = mp(p)
+        b = mp((p[0] + u[0], p[1] + u[1]))
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        return math.atan2(dy, dx) if dx * dx + dy * dy > 0.04 else math.atan2(u[1], u[0])
+
+    # 交差点：2本以上の道が同じ点を通る所
+    at = {}
+    for ri, (_, _, pts, _) in enumerate(road_lines):
+        for k, p in enumerate(pts):
+            at.setdefault((round(p[0], 1), round(p[1], 1)), []).append((ri, k))
+    junctions = []
+    for key, refs in at.items():
+        if len({ri for ri, _ in refs}) < 2:
+            continue
+        arms = []
+        for ri, k in refs:
+            hw, w, pts, name = road_lines[ri]
+            for step in (-1, 1):
+                # 交差点の近くで点が細かく区切られていることが多いので、道の終わりまでの長さを測る
+                ln, nb = 0.0, k
+                while 0 <= nb + step < len(pts):
+                    ln += math.hypot(pts[nb + step][0] - pts[nb][0], pts[nb + step][1] - pts[nb][1])
+                    nb += step
+                if ln < 1:
+                    continue
+                far = pts[k + step]
+                i = k + step
+                while math.hypot(far[0] - pts[k][0], far[1] - pts[k][1]) < 4 and 0 <= i + step < len(pts):
+                    i += step
+                    far = pts[i]
+                dx, dy = far[0] - pts[k][0], far[1] - pts[k][1]
+                dl = math.hypot(dx, dy) or 1
+                arms.append(dict(u=(dx / dl, dy / dl), w=w, len=ln, name=name if hw not in UNSIGNED_ROADS else None, road=ri))
+        if len(arms) >= 3:
+            junctions.append(dict(p=key, arms=arms, r=max(a["w"] for a in arms) / 2))
+
+    crosswalks, stops = [], []
+    for j in junctions:
+        widest = max(a["w"] for a in j["arms"])
+        P, r = j["p"], j["r"]
+        for a in j["arms"]:
+            u = a["u"]
+            crossed = False
+            if widest >= CROSSWALK_ROAD and a["w"] >= STOP_ROAD and a["len"] > r + 5:
+                c = (P[0] + u[0] * (r + 2.5), P[1] + u[1] * (r + 2.5))
+                mc = mp(c)
+                ang = mapped_angle(c, u)
+                # 中央分離帯のある道は上下線が別の道なので、同じ所に2本重なる。近くて向きが同じものは1本にする
+                dup = any((o["x"] - mc[0]) ** 2 + (o["y"] - mc[1]) ** 2 < 4.5 ** 2
+                          and abs(math.sin(o["angle"] - ang)) < 0.35 for o in crosswalks)
+                if ground_at(mc) == ROAD and not dup:
+                    crosswalks.append(dict(x=round(mc[0], 2), y=round(mc[1], 2), angle=round(ang, 3), len=a["w"]))
+                crossed = ground_at(mc) == ROAD
+            others = max((o["w"] for o in j["arms"] if o["road"] != a["road"]), default=0)
+            # 横断歩道があれば、停止線はその手前に引く
+            sd = r + (4.8 if crossed else 1.2)
+            if a["w"] <= STOP_ROAD and others >= CROSSWALK_ROAD and a["len"] > sd + 5:
+                c = (P[0] + u[0] * sd, P[1] + u[1] * sd)
+                mc = mp(c)
+                if ground_at(mc) == ROAD:
+                    stops.append(dict(x=round(mc[0], 2), y=round(mc[1], 2), angle=round(mapped_angle(c, u), 3), len=a["w"]))
+
+    # 中央線：交差点の中と、その手前の横断歩道の所は描かない
+    jr = [(j["p"], j["r"] + 5) for j in junctions]
+    lines = []
+    for hw, w, pts, _ in road_lines:
+        if w < CENTER_LINE_ROAD:
+            continue
+        run = []
+
+        def flush():
+            if len(run) >= 3:
+                lines.append(dict(pts=[[round(q[0], 2), round(q[1], 2)] for q in run], dash=w < SOLID_CENTER))
+            run.clear()
+
+        for a, b in zip(pts, pts[1:]):
+            ln = math.hypot(b[0] - a[0], b[1] - a[1])
+            n = max(1, int(ln))
+            for i in range(n + 1):
+                q = (a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n)
+                near = any((q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2 < rr * rr for c, rr in jr)
+                mq = mp(q)
+                if near or ground_at(mq) != ROAD:
+                    flush()
+                elif not run or (mq[0] - run[-1][0]) ** 2 + (mq[1] - run[-1][1]) ** 2 > 0.25:
+                    run.append(mq)
+        flush()
+
+    manholes = []
+    for y in range(2, H - 2):
+        for x in range(2, W - 2):
+            if ground[y][x] == ROAD and solid[y][x] == FREE and rng.random() < MANHOLE_RATE:
+                manholes.append([x + 0.5, y + 0.5])
+
+    signs = []
+    placed = {}
+    for j in junctions:
+        names = []
+        for a in sorted(j["arms"], key=lambda a: -a["w"]):
+            if a["name"] and a["name"] not in names:
+                names.append(a["name"])
+        names = [n for n in names if all((j["p"][0] - q[0]) ** 2 + (j["p"][1] - q[1]) ** 2 > SIGN_SPACING ** 2 for q in placed.get(n, []))]
+        if not names:
+            continue
+        P, d = j["p"], j["r"] + 1.8
+        # 手前（南）の角から探す。カメラから見えやすいので
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            mpos = mp((P[0] + sx * d, P[1] + sy * d))
+            if free_walk(mpos):
+                signs.append(dict(kind="street", x=round(mpos[0], 2), y=round(mpos[1], 2), text=names[:2]))
+                for n in names[:2]:
+                    placed.setdefault(n, []).append(P)
+                break
+
+    # 駅名標：駅の建物の、道に面した側の外
+    stations = []
+    for b, rects in rects_by_b.items():
+        bb = buildings[b]
+        if bb["type"] != "station":
+            continue
+        name = clean_station_name(bb["tags"].get("name"))
+        for p in bb["pois"]:
+            if not name and is_station(p):
+                name = clean_station_name(p.get("name"))
+        if not name:
+            continue
+        xs = [r[0] for r in rects] + [r[0] + r[2] for r in rects]
+        ys = [r[1] for r in rects] + [r[1] + r[3] for r in rects]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        cands = [(cx, max(ys) + 1.5), (cx, min(ys) - 1.5), (max(xs) + 1.5, cy), (min(xs) - 1.5, cy)]
+        for c in cands:
+            if free_walk(c) and not any(s["text"] == [name] and (s["x"] - c[0]) ** 2 + (s["y"] - c[1]) ** 2 < 60 ** 2 for s in stations):
+                stations.append(dict(kind="station", x=round(c[0], 2), y=round(c[1], 2), text=[name]))
+                break
+
+    # 町名：「外神田三丁目」は「外神田」にまとめる
+    by_name = {}
+    for n in nodes:
+        t = n.get("tags", {})
+        if t.get("place") not in PLACE_KINDS or not t.get("name"):
+            continue
+        name = re.sub(r"[一二三四五六七八九十0-9０-９]+丁目$", "", t["name"]).strip()
+        px, py = proj(n)
+        # 遠くの町の中心は、マップの端で一番近い町名になってしまうので入れない
+        if not (-PLACE_MARGIN_M <= px <= W0 + PLACE_MARGIN_M and -PLACE_MARGIN_M <= py <= H0 + PLACE_MARGIN_M):
+            continue
+        x, y = mp((px, py))
+        by_name.setdefault(name, []).append((x, y))
+    areas = [dict(name=k, x=round(sum(p[0] for p in v) / len(v), 1), y=round(sum(p[1] for p in v) / len(v), 1)) for k, v in by_name.items()]
+
+    return dict(
+        markings=dict(crosswalks=crosswalks, stops=stops, lines=lines, manholes=manholes),
+        signs=signs + stations,
+        areas=areas,
+    )
 
 if __name__ == "__main__":
     main()

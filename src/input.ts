@@ -21,7 +21,7 @@ export class InputState {
   onPauseKey: () => void = () => {};
   onInventory: () => void = () => {};
   onMap: () => void = () => {};
-  /** F キー。true を返したら（箱の中身を取ったなど）ゲームには渡さない */
+  /** E キー。true を返したら（箱の中身を取ったなど）ゲームには渡さない */
   onInteract: () => boolean = () => false;
   onDebug: (key: "sight" | "beacon") => void = () => {};
   onRestart: () => void = () => {};
@@ -41,7 +41,7 @@ export class InputState {
         case "Digit2": this.pending.swap = 1; break;
         case "KeyQ": this.pending.swap = -1; break;
         case "KeyX": this.pending.cancel = true; break;
-        case "KeyF":
+        case "KeyE":
           if (!this.onInteract()) this.pending.interact = true;
           break;
         case "Tab": this.onInventory(); break;

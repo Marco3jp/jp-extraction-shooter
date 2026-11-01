@@ -34,10 +34,17 @@
 ### マップ
 `tools/osm_to_map.py` が、OpenStreetMap の建物・道路・緑地・鉄道をゲーム用の 1m グリッドに変換する。
 
-1. 範囲（緯度経度の矩形）を指定して Overpass API から取得したものを描き込む。細い歩道や階段は描かない。取得には、範囲内の `building` `highway` `landuse` `leisure` `railway` の way を `out geom tags` で出すクエリを使い、結果を `tools/osm-raw/area.json` に置く
+マップごとの設定（範囲・名前・出発地点・脱出地点の候補・勢力ごとの縄張り）は `tools/maps/<名前>.json` に書く。出発地点などはマップの幅・高さに対する割合で書き、ゲームはマップの JSON の `layout` から読む。
+
+0. `npm run fetch-map -- tools/maps/<名前>.json` で、範囲内の `building` `highway` `landuse` `leisure` `railway` `amenity` `shop` の way と、お店・施設・地名・駅の点を Overpass API から取得して `tools/osm-raw/` に置く
+1. 取得したものを描き込む。細い歩道や階段は描かない
 2. ならす：1〜2m の隙間と、建物と歩道の間の幅4m以下の空き地は建物で埋める。建物の輪郭は3×3の多数決でならす。小さな地面のかけらは周りに合わせる
 3. 縮める：縦横に近い大通り・高架の鉄道、4000㎡以上の建物、1000㎡以上の駅と公園を「残す場所」にして、その行・列は切らない。それ以外では、同じ向きの細い道が3本以上並ぶと内側を1本おきに抜き、36m を超える街区は 28m に詰める
 4. 車・自販機・バリケードを置く。車は細い道の路肩に置く
+5. 建物の種類を決める。中にあるお店・施設の点、建物の種類と名前、面積・階数・周りの土地の使われ方の順に見て、最初に決まったものを採る。道に面した側（`front`）も出す
+6. 横断歩道・中央線・停止線・マンホール・通りの名前の標識・駅名標・町名の範囲を、縮めた後の座標で出す。縮める前の座標は、残った列・行を数えて写す
+
+`npm run map -- tools/maps/<名前>.json` で 1〜6 を通して `public/maps/<名前>.json` に書き出す。
 
 地図データを含めて公開しているので、OpenStreetMap のクレジット（ODbL）をゲーム画面と README に書いている。
 
@@ -85,7 +92,9 @@
 ## 試作のファイル
 | パス | 中身 |
 |---|---|
+| `tools/fetch_osm.py` | マップの範囲の OpenStreetMap のデータを取得する |
 | `tools/osm_to_map.py` | OpenStreetMap の JSON をゲーム用マップに変換する |
+| `tools/maps/` | マップごとの範囲・出発地点・脱出地点・縄張り |
 | `src/data/` | 数値の定義 |
 | `src/sim/` | ゲームの計算。Three.js にも DOM にも依存しない |
 | `src/sim/stats.ts` | アタッチメントを付けた武器の性能の計算 |
@@ -93,6 +102,7 @@
 | `src/ui/hub/` | 拠点の画面 |
 | `src/ui/icons.ts` | アイテムのアイコン |
 | `src/render/renderer.ts` | Three.js での描画 |
+| `src/render/cityscape.ts` | 地面の表示・建物の種類ごとの部品・標識の描画 |
 | `src/hud.ts` | HUD・持ち物の画面・キルログ |
 | `src/mapview.ts` | ミニマップと全体マップ |
 | `src/input.ts` `src/audio.ts` | 入力・効果音 |

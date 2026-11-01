@@ -1,4 +1,4 @@
-import { DT, HEALS, ITEMS, HEALTH_MAX, SWAP_TIME, type HealKind } from "./data";
+import { DT, HEALS, ITEMS, HEALTH_MAX, SWAP_TIME, THERMITE, type HealKind } from "./data";
 import { bagCount, bagRemove } from "./inventory";
 import type { Vec } from "./map";
 import type { Actor, World } from "./world";
@@ -12,6 +12,11 @@ export function weapon(a: Actor) {
 export function reserve(w: World, a: Actor): number {
   if (a.team !== "player") return Infinity;
   return bagCount(w.bag, weapon(a).def.ammo);
+}
+
+/** テルミットで遅くなっているときの移動速度の倍率 */
+export function burnMul(a: Actor): number {
+  return a.burnT > 0 ? THERMITE.slowMul : 1;
 }
 
 export function isMoving(a: Actor): boolean {
@@ -82,6 +87,7 @@ export function tickTimers(w: World, a: Actor) {
   if (a.swapT > 0) a.swapT = Math.max(0, a.swapT - DT);
   if (a.readyT > 0) a.readyT = Math.max(0, a.readyT - DT);
   if (a.dashCd > 0) a.dashCd = Math.max(0, a.dashCd - DT);
+  if (a.burnT > 0) a.burnT = Math.max(0, a.burnT - DT);
   if (a.reloadT > 0) {
     a.reloadT -= DT;
     if (a.reloadT <= 0) {
@@ -154,9 +160,10 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
   if (!target.alive) return;
   const hadShield = target.shield > 0;
   const absorbed = Math.min(target.shield, dmg);
+  const amount = absorbed + Math.min(target.health, dmg - absorbed);
   target.shield -= absorbed;
   target.health -= dmg - absorbed;
-  w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: absorbed > 0 });
+  w.events.push({ type: "hit", actor: target.id, by: by?.id ?? 0, pos: { ...at }, shield: absorbed > 0, amount });
   if (hadShield && target.shield <= 0) {
     w.events.push({ type: "shieldBreak", actor: target.id, pos: { ...target.pos } });
   }

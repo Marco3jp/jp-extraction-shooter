@@ -1,6 +1,6 @@
-import { DT, ENEMY, ENEMY_SPEED, HEAL_MOVE_SPEED, ROAM_CHANCE, ROAM_DISTANCE } from "./data";
-import { cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
-import type { Vec } from "./map";
+import { DT, ENEMY, ENEMY_SPEED, FRAG, HEAL_MOVE_SPEED, ROAM_CHANCE, ROAM_DISTANCE, THERMITE } from "./data";
+import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
+import type { PathAvoid, Vec } from "./map";
 import type { Actor, World } from "./world";
 
 const SCAN_INTERVAL = 0.2;
@@ -53,16 +53,38 @@ export function alert(w: World, e: Actor, at: Vec, source: Actor | null, spread 
   }
 }
 
+/** 炎のセルに入るときに1歩あたりへ足す重み。炎を突っ切るより、この倍率までの回り道を選ぶ */
+const FIRE_PATH_COST = 12;
+
+/** 燃えている炎を避ける。炎が無ければ undefined */
+function fireAvoid(w: World): PathAvoid | undefined {
+  if (!w.fires.length) return undefined;
+  const reach = THERMITE.width / 2 + 0.5;
+  const near = (p: Vec) => w.fires.some((f) => dist(p, closestOnSeg(p, f.a, f.b)) <= reach);
+  return {
+    cellCost: (cx, cy) => (near({ x: cx + 0.5, y: cy + 0.5 }) ? FIRE_PATH_COST : 0),
+    lineOk: (a, b) => {
+      const n = Math.ceil(dist(a, b) / 0.5);
+      for (let i = 0; i <= n; i++) {
+        const k = i / Math.max(n, 1);
+        if (near({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k })) return false;
+      }
+      return true;
+    },
+  };
+}
+
 /** target へ向かう速度ベクトルを返す。経路は必要なときだけ引き直す */
 function seek(w: World, e: Actor, target: Vec, speed: number): Vec {
   const ai = e.ai!;
   ai.repathT -= DT;
   const moved = !ai.pathTarget || dist(ai.pathTarget, target) > 2.5;
   if (moved || ai.repathT <= 0) {
-    if (w.map.walkLine(e.pos, target, 0.45)) {
+    const avoid = fireAvoid(w);
+    if (w.map.walkLine(e.pos, target, 0.45) && (!avoid || avoid.lineOk(e.pos, target))) {
       ai.path = [{ ...target }];
     } else {
-      ai.path = w.map.findPath(e.pos, target, 12000) ?? [];
+      ai.path = w.map.findPath(e.pos, target, 12000, avoid) ?? [];
     }
     ai.pathTarget = { ...target };
     ai.repathT = ai.state === "patrol" ? 4 : 0.8 + w.rng.next() * 0.4;
@@ -117,6 +139,89 @@ function findCover(w: World, e: Actor, threat: Vec): Vec | null {
     }
   }
   return best;
+}
+
+/** 逃げ先の候補を比べるとき、狙っている相手から見える場所に足す距離（m） */
+const EXPOSED_PENALTY = 4;
+/** グレネードが着地してから、反応時間に加えて気づくまでにかかる秒数 */
+const GRENADE_NOTICE_DELAY = 0.25;
+/** 相手の残りがこれ以下で、自分にこれ以上残っていれば、炎の中に留まって撃ち合う */
+const STAY_IN_FIRE_TARGET_HP = 50;
+const STAY_IN_FIRE_SELF_HP = 110;
+
+function closestOnSeg(p: Vec, a: Vec, b: Vec): Vec {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const ll = dx * dx + dy * dy || 1e-9;
+  const k = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / ll));
+  return { x: a.x + dx * k, y: a.y + dy * k };
+}
+
+/** 候補のうち、まっすぐ歩いて行けて一番近いもの。相手から見える場所は遠いものとして扱う */
+function bestEscape(w: World, e: Actor, cands: Vec[], t: Actor | undefined): Vec | null {
+  let best: Vec | null = null;
+  let bestScore = Infinity;
+  for (const c of cands) {
+    if (!w.map.walkable(c.x, c.y) || !w.map.walkLine(e.pos, c, 0.4)) continue;
+    let score = dist(e.pos, c);
+    if (t && w.map.los(c, t.pos)) score += EXPOSED_PENALTY;
+    if (score < bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/** 見えているグレネードの爆発に巻き込まれない場所。巻き込まれないなら null */
+function grenadeEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
+  const reach = FRAG.radius + e.radius + 0.6;
+  for (const g of w.grenades) {
+    if (g.kind !== "frag" || g.t < g.flight + spec(e).reaction + GRENADE_NOTICE_DELAY) continue;
+    if (dist(e.pos, g.to) > reach || !w.map.los(g.to, e.pos)) continue;
+    const safe = (p: Vec) => dist(p, g.to) > reach || !w.map.los(g.to, p);
+    const cands: Vec[] = [];
+    for (let i = 0; i < 16; i++) {
+      const ang = (i / 16) * Math.PI * 2;
+      for (let r = 1; r <= reach * 2; r += 0.75) {
+        const p = { x: e.pos.x + Math.cos(ang) * r, y: e.pos.y + Math.sin(ang) * r };
+        if (safe(p)) {
+          cands.push(p);
+          break;
+        }
+      }
+    }
+    // 逃げ場が無ければ、爆心からまっすぐ離れる
+    return bestEscape(w, e, cands, t) ?? {
+      x: e.pos.x + (e.pos.x - g.to.x) * 3,
+      y: e.pos.y + (e.pos.y - g.to.y) * 3,
+    };
+  }
+  return null;
+}
+
+/** 炎の中にいれば、炎の外の場所。留まると決めたときと、炎の外にいるときは null */
+function fireEscape(w: World, e: Actor, t: Actor | undefined): Vec | null {
+  const reach = THERMITE.width / 2 + e.radius;
+  for (const f of w.fires) {
+    const c = closestOnSeg(e.pos, f.a, f.b);
+    const d = dist(e.pos, c);
+    if (d > reach) continue;
+    const ai = e.ai!;
+    if (t && ai.canSee && t.shield + t.health <= STAY_IN_FIRE_TARGET_HP && e.shield + e.health >= STAY_IN_FIRE_SELF_HP) return null;
+    const lx = f.b.x - f.a.x, ly = f.b.y - f.a.y;
+    const ll = Math.hypot(lx, ly) || 1;
+    const ux = lx / ll, uy = ly / ll;
+    const clear = reach + 0.6;
+    // 炎の左右と、両端の先
+    const cands: Vec[] = [
+      { x: c.x - uy * clear, y: c.y + ux * clear },
+      { x: c.x + uy * clear, y: c.y - ux * clear },
+      { x: f.a.x - ux * clear, y: f.a.y - uy * clear },
+      { x: f.b.x + ux * clear, y: f.b.y + uy * clear },
+    ];
+    return bestEscape(w, e, cands, t) ?? (d > 0.05 ? { x: c.x + ((e.pos.x - c.x) / d) * clear, y: c.y + ((e.pos.y - c.y) / d) * clear } : cands[0]);
+  }
+  return null;
 }
 
 /** 見えている敵対相手のうち、一番近いものを探す */
@@ -181,6 +286,9 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
   let vel: Vec = { x: 0, y: 0 };
   let trigger = false;
   const toT = t ? Math.atan2(t.pos.y - e.pos.y, t.pos.x - e.pos.x) : e.facing;
+
+  const escape = grenadeEscape(w, e, t) ?? fireEscape(w, e, t);
+  if (escape && e.heal) cancelHeal(w, e);
 
   if (e.heal) {
     if (t && ai.canSee && d < 7 && e.health > 35) cancelHeal(w, e);
@@ -306,6 +414,13 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
     }
   }
 
+  if (escape) {
+    const dx = escape.x - e.pos.x, dy = escape.y - e.pos.y;
+    const l = Math.hypot(dx, dy) || 1;
+    vel = { x: (dx / l) * ENEMY_SPEED.push, y: (dy / l) * ENEMY_SPEED.push };
+    if (!ai.canSee) turnTo(e, Math.atan2(dy, dx), 6);
+  }
+
   if (e.reloadT > 0 || e.heal) {
     const s = Math.hypot(vel.x, vel.y);
     const max = e.heal ? HEAL_MOVE_SPEED : 4.4;
@@ -314,6 +429,10 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
       vel.y = (vel.y / s) * max;
     }
   }
+
+  const slow = burnMul(e);
+  vel.x *= slow;
+  vel.y *= slow;
 
   const k = 1 - Math.exp(-DT * 12);
   e.vel.x += (vel.x - e.vel.x) * k;

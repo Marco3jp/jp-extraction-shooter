@@ -56,7 +56,7 @@ async function main() {
       <tr><td>3 / 4</td><td>シールド1個（2秒）／まとめて最大4個（5秒）</td></tr>
       <tr><td>5 / 6</td><td>ヘルス小（3.5秒）／ヘルス大（8秒）</td></tr>
       <tr><td>X・左クリック</td><td>回復をキャンセル（まとめて回復は何も回復しない）</td></tr>
-      <tr><td>F</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）</td></tr>
+      <tr><td>E</td><td>拾う・箱を開ける・開いた箱から全部取る（空になったら次の箱を開ける）</td></tr>
       <tr><td>Tab</td><td>持ち物（右クリックで捨てる）</td></tr>
       <tr><td>M</td><td>地図</td></tr>
       <tr><td>Esc / P</td><td>閉じる / ポーズ</td></tr>
@@ -139,7 +139,8 @@ async function main() {
     if (mode !== "playing") return;
     mode = "paused";
     input.clearHeld();
-    showOverlay(`<h1>ポーズ</h1>${controls}<p class="hint">Esc / P / クリックで再開</p>`);
+    showOverlay(`<h1>ポーズ</h1>${controls}<p class="hint">Esc / P / クリックで再開</p>
+      <button class="retire" data-retire>リタイアして拠点に戻る（死んだときと同じく、拾った物を失う）</button>`);
   };
   const togglePause = () => {
     if (mode === "playing") pause();
@@ -204,7 +205,15 @@ async function main() {
   };
   overlay.addEventListener("mousedown", (e) => {
     e.stopPropagation();
-    if (mode === "paused") resume();
+    if (mode !== "paused") return;
+    if ((e.target as HTMLElement).closest("[data-retire]")) {
+      world.outcome = "dead";
+      mode = "ending";
+      showOverlay(null);
+      finishRun();
+    } else {
+      resume();
+    }
   });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) pause();

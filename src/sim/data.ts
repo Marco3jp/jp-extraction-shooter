@@ -7,3 +7,4 @@ export * from "../data/heals";
 export * from "../data/enemies";
 export * from "../data/recipes";
 export * from "../data/throwables";
+export * from "../data/buildings";
