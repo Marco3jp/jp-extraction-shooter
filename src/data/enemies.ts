@@ -8,6 +8,8 @@ export const ENEMY = {
   short: {
     name: "近距離型",
     weapon: { type: "smg" as WeaponType, attachments: [] as AttachmentId[] },
+    /** 武器のダメージに掛ける割合。連射速度は変えないので、DPS も同じ割合で下がる */
+    damageMul: 0.75,
     sight: 30,
     keepDistance: 9,
     aimError: 3.5,
@@ -19,6 +21,7 @@ export const ENEMY = {
   mid: {
     name: "中距離型",
     weapon: { type: "ar" as WeaponType, attachments: [] as AttachmentId[] },
+    damageMul: 0.75,
     sight: 35,
     keepDistance: 16,
     aimError: 2.2,
@@ -29,6 +32,7 @@ export const ENEMY = {
   long: {
     name: "遠距離型",
     weapon: { type: "long" as WeaponType, attachments: ["rapidReceiver", "extMag"] as AttachmentId[] },
+    damageMul: 0.6,
     sight: 42,
     keepDistance: 26,
     aimError: 1.2,
@@ -84,8 +88,8 @@ export const ENEMY_SPAWNS: { faction: number; groups: EnemyKind[][] }[] = [
   },
 ];
 /** 歩けるマス1万あたりの、グループと単独の敵の数。区画ごとに、区画の歩けるマスの数から決める。数値は仮 */
-export const GROUPS_PER_10K = 1.0;
-export const SOLOS_PER_10K = 0.9;
+export const GROUPS_PER_10K = 0.6;
+export const SOLOS_PER_10K = 0.5;
 /** グループの真ん中・単独の敵を、出発地点からこの距離（m）より近くに置かない */
 export const GROUP_MIN_FROM_START = 80;
 /** プレイヤーからこの距離（m）より遠い敵は止めておく。区画を読む距離（640m）より短くする */

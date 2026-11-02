@@ -422,7 +422,7 @@ export function enemyWeapon(kind: EnemyKind): WeaponDef {
   let w = enemyWeapons.get(kind);
   if (!w) {
     const spec = ENEMY[kind].weapon;
-    const base = computeWeapon(spec.type, spec.attachments, [], ENEMY_MIN_TTK);
+    const base = computeWeapon(spec.type, spec.attachments, [{ stat: "damage", mul: ENEMY[kind].damageMul - 1 }], ENEMY_MIN_TTK);
     w = { ...base, bulletSpeed: base.bulletSpeed * ENEMY_BULLET_SPEED_MUL };
     enemyWeapons.set(kind, w);
   }
