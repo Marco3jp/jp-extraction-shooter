@@ -1595,6 +1595,61 @@ section("銃声で寄ってくる敵", () => {
   }
 });
 
+section("押されている敵はプレイヤーを後回しにする", () => {
+  // 勢力Aの1人と勢力Bの3人組が撃ち合っている所に、両方から見える所へプレイヤーが来る。
+  // 手を出さなければ勢力Aは3人組を狙い続け、勢力Aを撃てばプレイヤーへ向き直るか
+  const run = (seed: number, shoot: boolean) => {
+    const prof = defaultProfile();
+    const w = createWorld(map, seed, makeRunLoadout(prof, map.index.id));
+    const p = w.player;
+    w.actors = w.actors.filter((a) => a.team === "player");
+    const rng = new Rng(seed);
+    const free = (from: Vec, r: number): Vec | null => {
+      for (let k = 0; k < 400; k++) {
+        const ang = rng.range(-Math.PI, Math.PI);
+        const q = { x: from.x + Math.cos(ang) * r, y: from.y + Math.sin(ang) * r };
+        if (w.map.walkable(q.x, q.y) && w.map.los(from, q)) return q;
+      }
+      return null;
+    };
+    const aPos = { ...p.pos };
+    const bPos = free(aPos, 18);
+    let pPos: Vec | null = null;
+    for (let k = 0; k < 50 && bPos && !pPos; k++) {
+      const q = free(aPos, 12);
+      if (q && w.map.los(bPos, q)) pPos = q;
+    }
+    if (!bPos || !pPos) return null;
+    p.pos = { ...pPos };
+    const a = makeEnemy(w, rng, "mid", 1, aPos, 9001, false);
+    const bs = (["short", "mid", "long"] as const).map((kind) => makeEnemy(w, rng, kind, 2, { ...bPos }, 9002, false));
+    w.actors.push(a, ...bs);
+    let aToB = 0, bToP = 0, aOnP = 0, aAlive = 0;
+    for (let i = 0; i < 30 * 6; i++) {
+      if (a.alive) {
+        aAlive++;
+        if (a.ai!.target === p.id) aOnP++;
+      }
+      p.invulnT = 0;
+      const fire = shoot && i < 30 && a.alive;
+      step(w, { ...emptyInput(), aim: fire ? { ...a.pos } : { x: p.pos.x + 1, y: p.pos.y }, fire });
+      // プレイヤーは倒れないように、受けた分を戻す
+      p.shield = p.shieldMax;
+      p.health = 100;
+      for (const ev of w.events) {
+        if (ev.type !== "hit") continue;
+        if (ev.by === a.id && bs.some((b) => b.id === ev.actor)) aToB += ev.amount;
+        if (bs.some((b) => b.id === ev.by) && ev.actor === p.id) bToP += ev.amount;
+      }
+    }
+    return `勢力Aがプレイヤーを狙っていた割合 ${Math.round((aOnP / Math.max(aAlive, 1)) * 100)}%・勢力A→3人組 ${Math.round(aToB)}・3人組→プレイヤー ${Math.round(bToP)}`;
+  };
+  for (const seed of [1, 2, 3]) {
+    const idle = run(seed, false), shot = run(seed, true);
+    console.log(`押されている敵 seed=${seed}: ${idle && shot ? `手を出さない 6秒 ${idle}／最初の1秒 勢力Aを撃つ 6秒 ${shot}` : "置き場所が見つからない"}`);
+  }
+});
+
 type Done = { k: number; out: string; error?: string; ms: number };
 
 if (isMainThread) {

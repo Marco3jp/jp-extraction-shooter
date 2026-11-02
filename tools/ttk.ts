@@ -47,10 +47,11 @@ for (const t of WEAPON_TYPES) {
 
 console.log("\n■ 敵の武器（プレイヤーの標準防具：シールド100＋ヘルス100）");
 for (const [kind, spec] of Object.entries(ENEMY)) {
-  const w = computeWeapon(spec.weapon.type, spec.weapon.attachments, [], ENEMY_MIN_TTK);
+  const base = computeWeapon(spec.weapon.type, spec.weapon.attachments, [], ENEMY_MIN_TTK);
+  const w = computeWeapon(spec.weapon.type, spec.weapon.attachments, [{ stat: "damage", mul: spec.damageMul - 1 }], ENEMY_MIN_TTK);
   const { ttk, shots } = theoreticalTtk(w, 200);
-  console.log(`${spec.name}\t${w.name}${w.style ? `（${w.style}）` : ""}\t${shots}発\t${ttk.toFixed(2)}秒`);
-  if (ttk < ENEMY_MIN_TTK - 1e-9) violations++;
+  console.log(`${spec.name}\t${w.name}${base.style ? `（${base.style}）` : ""}\t1発 ${w.damage.toFixed(1)}\tDPS ${(w.damage * w.rate).toFixed(0)}\t${shots}発\t${ttk.toFixed(2)}秒`);
+  if (theoreticalTtk(base, 200).ttk < ENEMY_MIN_TTK - 1e-9) violations++;
   void kind;
 }
 

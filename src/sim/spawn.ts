@@ -45,6 +45,7 @@ export function makeEnemy(w: World, rng: Rng, kind: EnemyKind, faction: number, 
     strafe: 1, strafeT: 0, stateT: 0, waitT: rng.range(0, 3),
     heals: 2,
     roam,
+    outmatchedBy: null, playerHitT: -Infinity,
     burstT: 0, burstLen: 0.8, restT: 0,
   };
   const ammo = e.weapons[0].def.ammo;

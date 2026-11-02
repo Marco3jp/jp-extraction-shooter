@@ -1,4 +1,4 @@
-import { DT, HEALS, ITEMS, HEALTH_MAX, SELF_REVIVE, SWAP_TIME, THERMITE, type HealKind } from "./data";
+import { DT, HEALS, ITEMS, HEALTH_MAX, PLAYER_FACTION, SELF_REVIVE, SWAP_TIME, THERMITE, type HealKind } from "./data";
 import { bagCount, bagRemove } from "./inventory";
 import type { Vec } from "./map";
 import { bottomlessOn, onKill } from "./skills";
@@ -195,6 +195,7 @@ function selfRevive(w: World, a: Actor): boolean {
 
 export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | undefined, at: Vec) {
   if (!target.alive || target.invulnT > 0) return;
+  if (target.ai && by?.faction === PLAYER_FACTION) target.ai.playerHitT = w.time;
   const over = Math.min(target.overshield, dmg);
   target.overshield -= over;
   dmg -= over;

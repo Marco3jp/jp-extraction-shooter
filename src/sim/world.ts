@@ -42,6 +42,10 @@ export type Ai = {
   roam: boolean;
   /** 脱出地点に寄せた敵。プレイヤーよりほかの勢力の敵を先に狙う */
   rival?: boolean;
+  /** 撃ち合っているほかの勢力のほうが強いときの、その相手。プレイヤーの側より先に狙う */
+  outmatchedBy: number | null;
+  /** プレイヤーの側から最後にダメージを受けた時刻 */
+  playerHitT: number;
   /** 連射を続けている時間。burstLen を超えたら restT だけ撃つのをやめる */
   burstT: number;
   burstLen: number;
@@ -389,6 +393,7 @@ function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
     // 回復の回数を数えるのは前の作りのときだけ（PARTNER_TACTICS）
     heals: PARTNER_TACTICS.mode === "classic" ? PARTNER_TACTICS.classicHeals : 0,
     roam: false,
+    outmatchedBy: null, playerHitT: -Infinity,
     burstT: 0, burstLen: 0.8, restT: 0,
   };
   a.partner = { index, model, reviveT: 0, heading: -Math.PI / 2, healKind: null,

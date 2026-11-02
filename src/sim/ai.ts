@@ -1,4 +1,4 @@
-import { DT, ENEMY, ENEMY_SPEED, FRAG, HEAL_MOVE_SPEED, PARTNER, ROAM_CHANCE, ROAM_DISTANCE, THERMITE } from "./data";
+import { DT, ENEMY, ENEMY_SPEED, FRAG, HEAL_MOVE_SPEED, PARTNER, PLAYER_FACTION, ROAM_CHANCE, ROAM_DISTANCE, THERMITE } from "./data";
 import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
 import type { PathAvoid, Vec } from "./map";
 import type { Actor, World } from "./world";
@@ -6,6 +6,10 @@ import type { Actor, World } from "./world";
 const SCAN_INTERVAL = 0.2;
 /** 見失ってから巡回に戻るまで */
 const FORGET_AFTER = 8;
+/** ほかの勢力と撃ち合っているとき、両方の強さを比べるために仲間を数える範囲（m） */
+const SIDE_RADIUS = 40;
+/** プレイヤーの側に撃たれたら、この秒数はほかの勢力に押されていてもプレイヤーの側を狙う */
+const PROVOKED_FOR = 6;
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -30,11 +34,51 @@ export function spec(e: Actor) {
   return e.kind === "partner" ? PARTNER : ENEMY[e.kind as keyof typeof ENEMY];
 }
 
+function sideHp(w: World, faction: number, at: Vec) {
+  let hp = 0;
+  for (const o of w.actors) {
+    if (o.alive && o.faction === faction && dist(o.pos, at) < SIDE_RADIUS) hp += o.shield + o.health + o.overshield;
+  }
+  return hp;
+}
+
+/** 撃ち合っているほかの勢力（プレイヤーの側を除く）の相手を探し、その勢力のほうが強ければ返す */
+function strongerRival(w: World, e: Actor, byId: Map<number, Actor>): Actor | null {
+  const ai = e.ai!;
+  const sight = spec(e).sight;
+  const cur = ai.target !== null ? byId.get(ai.target) : undefined;
+  let rival: Actor | null = null;
+  if (cur?.alive && cur.faction !== PLAYER_FACTION && dist(e.pos, cur.pos) < sight * 1.15) {
+    rival = cur;
+  } else {
+    let best = Infinity;
+    for (const o of w.actors) {
+      if (!o.alive || o.faction === PLAYER_FACTION || !hostile(e, o)) continue;
+      const d = dist(e.pos, o.pos);
+      if (d > sight || d >= best || !w.map.los(e.pos, o.pos)) continue;
+      rival = o;
+      best = d;
+    }
+  }
+  if (!rival) return null;
+  return sideHp(w, e.faction, e.pos) < sideHp(w, rival.faction, rival.pos) ? rival : null;
+}
+
+/**
+ * ほかの勢力に押されている間は、手を出してこないプレイヤーの側を後回しにする。
+ * 押している勢力を先に片付けたほうが、残ったプレイヤーと撃ち合うときに有利なので
+ */
+function ignoresPlayer(w: World, e: Actor) {
+  const ai = e.ai!;
+  return e.team === "enemy" && ai.outmatchedBy !== null && w.time - ai.playerHitT > PROVOKED_FOR;
+}
+
 /** at に敵がいると知らせる。source が分かっていれば狙う相手にする */
 export function alert(w: World, e: Actor, at: Vec, source: Actor | null, spread = true) {
   const ai = e.ai;
   if (!ai || !e.alive) return;
   if (source && !hostile(e, source)) return;
+  if (source?.faction === PLAYER_FACTION && ignoresPlayer(w, e)) source = null;
   // パートナーは狙う相手を覚えるだけで、動き方はプレイヤーに合わせて partner.ts で決める
   if (e.team === "partner") {
     if (!ai.canSee) {
@@ -247,15 +291,17 @@ export function scan(w: World, e: Actor): Actor | null {
   const sight = spec(e).sight;
   let best: Actor | null = null;
   let bestScore = Infinity;
+  const skipPlayer = ignoresPlayer(w, e);
   for (const o of w.actors) {
     if (!o.alive || !hostile(e, o)) continue;
+    if (skipPlayer && o.faction === PLAYER_FACTION) continue;
     const d = dist(e.pos, o.pos);
     if (d > sight) continue;
     if (ai.state === "patrol" && d > 6) {
       const a = Math.atan2(o.pos.y - e.pos.y, o.pos.x - e.pos.x);
       if (Math.abs(angleDiff(e.facing, a)) > 1.2) continue;
     }
-    const score = ai.rival ? (o.team === "enemy" ? d * 0.6 : d) : o.team === "player" ? d * 0.9 : d;
+    const score = ai.rival && o.team === "enemy" ? d * 0.6 : d;
     if (score >= bestScore) continue;
     if (!w.map.los(e.pos, o.pos)) continue;
     best = o;
@@ -272,9 +318,12 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
   ai.scanT -= DT;
   if (ai.scanT <= 0) {
     ai.scanT = SCAN_INTERVAL;
+    ai.outmatchedBy = strongerRival(w, e, byId)?.id ?? null;
     const found = scan(w, e);
-    if (found && found.id !== ai.target) {
-      const cur = ai.target !== null ? byId.get(ai.target) : undefined;
+    const cur = ai.target !== null ? byId.get(ai.target) : undefined;
+    if (cur?.faction === PLAYER_FACTION && ignoresPlayer(w, e)) {
+      ai.target = found?.id ?? ai.outmatchedBy;
+    } else if (found && found.id !== ai.target) {
       if (!cur || !cur.alive || !ai.canSee || dist(e.pos, found.pos) < dist(e.pos, cur.pos) - 5) ai.target = found.id;
     }
   }
