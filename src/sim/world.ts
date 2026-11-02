@@ -1,5 +1,5 @@
 import {
-  ENEMY, ENEMY_BULLET_SPEED_MUL, HEALTH_MAX, ITEMS, LOOT_AMMO_BIAS, LOOT_TABLE, PLAYER_FACTION, DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
+  ENEMY, ENEMY_BULLET_SPEED_MUL, HEALTH_MAX, ITEMS, LOOT_TABLE, PLAYER_FACTION, DASH, ENEMY_MIN_TTK, PASSIVES, PARTNER, PARTNER_MODELS, PARTNER_SLOTS, PARTNER_TACTICS, PLAYER_MIN_TTK, ULT_START_READY, ULTS,
   type ActorStats, type BuffId, type AmmoId, type AttachmentId, type EnemyKind, type HealKind, type ItemId, type KitChoice,
   type SkillId, type StatMod, type ThrowableId, type UltId, type WeaponDef, type WeaponType,
   DEVICES, type DeviceKind,
@@ -338,7 +338,8 @@ export type World = {
   nextId: number;
   startPos: Vec;
   /** 持ち込んだ武器の弾薬。箱から出やすくする */
-  preferAmmo: AmmoId[];
+  /** 持ち込んだ武器の弾薬。落ちている弾薬と敵の持ち物の弾薬はこのどれかになる */
+  runAmmo: AmmoId[];
   /** 敵と箱を置いた区画と、そこに置いた箱・落ちている物の番号 */
   spawned: Map<string, { loot: number[] }>;
   /** 捨てた区画で、倒した敵と、中身が変わった箱・拾われた物 */
@@ -411,18 +412,20 @@ function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
   return a;
 }
 
-/** preferAmmo を渡すと、弾薬が出たときに一定の確率でその弾薬に置き換える。tilt は出やすさに掛ける倍率 */
-export function rollStack(rng: Rng, preferAmmo: AmmoId[] = [], tilt: Partial<Record<ItemId, number>> = {}): Stack {
+export function rollAmmo(rng: Rng, runAmmo: AmmoId[]): Stack {
+  const item = rng.pick(runAmmo);
+  const t = LOOT_TABLE.find((x) => x.item === item)!;
+  return { item, count: t.min + rng.int(t.max - t.min + 1) };
+}
+
+/** tilt は出やすさに掛ける倍率 */
+export function rollStack(rng: Rng, runAmmo: AmmoId[], tilt: Partial<Record<ItemId, number>> = {}): Stack {
   const weight = (t: (typeof LOOT_TABLE)[number]) => t.weight * (tilt[t.item] ?? 1);
   const total = LOOT_TABLE.reduce((a, t) => a + weight(t), 0);
   let r = rng.next() * total;
   for (const t of LOOT_TABLE) {
     if ((r -= weight(t)) < 0) {
-      if (ITEMS[t.item].category === "ammo" && preferAmmo.length && rng.chance(LOOT_AMMO_BIAS)) {
-        const want = rng.pick(preferAmmo);
-        const wt = LOOT_TABLE.find((x) => x.item === want)!;
-        return { item: want, count: wt.min + rng.int(wt.max - wt.min + 1) };
-      }
+      if (ITEMS[t.item].category === "ammo") return rollAmmo(rng, runAmmo);
       let count = t.min + rng.int(t.max - t.min + 1);
       if (t.item === "money") count = Math.round(count / 10) * 10;
       return { item: t.item, count };
@@ -499,7 +502,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
   player.dashCharges = player.dashMax;
   if (loadout.bike) player.bike = { ...loadout.bike, state: "off", t: 0 };
   for (const ws of player.weapons) ws.mag = ws.def.mag;
-  const preferAmmo = loadout.weapons.map((w) => w.ammo);
+  const runAmmo = loadout.weapons.map((w) => w.ammo);
   const actors: Actor[] = [player];
 
   const bag = makeBag(loadout.bagSlots);
@@ -524,7 +527,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     debug: { sightLevel: 3, beaconLevel: 1 },
     nextId,
     startPos,
-    preferAmmo,
+    runAmmo,
     spawned: new Map(),
     memory: new Map(),
     nextGroup: 0,

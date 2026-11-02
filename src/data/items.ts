@@ -22,11 +22,11 @@ export type ItemDef = {
 
 /** 並び順はカバンを整理するときの順番でもある */
 export const ITEMS: Record<ItemId, ItemDef> = {
-  rifle: { name: "ライフル弾", short: "ライフル", stack: 60, rarity: "common", category: "ammo" },
-  smg: { name: "SMG弾", short: "SMG", stack: 40, rarity: "common", category: "ammo" },
-  long: { name: "長距離弾", short: "長距離", stack: 20, rarity: "common", category: "ammo" },
-  shell: { name: "ショットシェル", short: "シェル", stack: 16, rarity: "common", category: "ammo" },
-  light: { name: "ピストル弾", short: "ピストル", stack: 60, rarity: "common", category: "ammo" },
+  rifle: { name: "ライフル弾", short: "ライフル", stack: 100, rarity: "common", category: "ammo" },
+  smg: { name: "SMG弾", short: "SMG", stack: 60, rarity: "common", category: "ammo" },
+  long: { name: "長距離弾", short: "長距離", stack: 32, rarity: "common", category: "ammo" },
+  shell: { name: "ショットシェル", short: "シェル", stack: 24, rarity: "common", category: "ammo" },
+  light: { name: "ピストル弾", short: "ピストル", stack: 100, rarity: "common", category: "ammo" },
   cell: { name: "シールドセル", short: "セル", stack: 6, rarity: "common", category: "heal" },
   medSmall: { name: "ヘルス小", short: "ヘルス小", stack: 4, rarity: "common", category: "heal" },
   medLarge: { name: "ヘルス大", short: "ヘルス大", stack: 2, rarity: "rare", category: "heal" },
@@ -59,13 +59,13 @@ export const RARITY_COLORS: Record<Rarity, number> = {
 /** 強化パーツ1種類あたりの出やすさ。マップ全体の山はおよそ 900 なので、1種類が1ランに 1 個前後出る（仮） */
 export const BUFF_WEIGHT = { rare: 0.14, epic: 0.08 };
 
-/** 拾ったときの1山の数（最小〜最大）と、出やすさ */
+/** 拾ったときの1山の数（最小〜最大）と、出やすさ。弾薬はどれかが出たら、持ち込んだ武器の弾薬のどれかに置き換わる */
 export const LOOT_TABLE: { item: ItemId; min: number; max: number; weight: number }[] = [
-  { item: "rifle", min: 20, max: 40, weight: 6 },
-  { item: "smg", min: 20, max: 30, weight: 6 },
-  { item: "long", min: 8, max: 14, weight: 5 },
-  { item: "shell", min: 8, max: 12, weight: 5 },
-  { item: "light", min: 20, max: 40, weight: 6 },
+  { item: "rifle", min: 15, max: 30, weight: 9 },
+  { item: "smg", min: 18, max: 32, weight: 9 },
+  { item: "long", min: 5, max: 10, weight: 7.5 },
+  { item: "shell", min: 4, max: 8, weight: 7.5 },
+  { item: "light", min: 10, max: 20, weight: 9 },
   { item: "cell", min: 1, max: 3, weight: 16 },
   { item: "medSmall", min: 1, max: 2, weight: 11 },
   { item: "medLarge", min: 1, max: 1, weight: 3 },

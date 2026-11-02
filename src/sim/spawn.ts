@@ -7,7 +7,7 @@ import {
 import type { Stack } from "./inventory";
 import { CHUNK, Ground, Solid, chunkKey, type LoadedChunk, type Vec } from "./map";
 import { Rng } from "./rng";
-import { enemyWeapon, makeActor, pickWeighted, rollStack, type Actor, type Loot, type World } from "./world";
+import { enemyWeapon, makeActor, pickWeighted, rollAmmo, rollStack, type Actor, type Loot, type World } from "./world";
 
 /** 区画と、その区画の中で置いた順番 */
 export type SpawnRef = { chunk: string; n: number };
@@ -48,8 +48,12 @@ export function makeEnemy(w: World, rng: Rng, kind: EnemyKind, faction: number, 
     outmatchedBy: null, playerHitT: -Infinity,
     burstT: 0, burstLen: 0.8, restT: 0,
   };
-  const ammo = e.weapons[0].def.ammo;
-  e.carry.push({ item: ammo, count: 30 + rng.int(4) * 10 });
+  for (let i = 0; i < 2; i++) {
+    const s = rollAmmo(rng, w.runAmmo);
+    const same = e.carry.find((c) => c.item === s.item);
+    if (same) same.count += s.count;
+    else e.carry.push(s);
+  }
   if (rng.chance(0.75)) e.carry.push({ item: "cell", count: 1 + rng.int(3) });
   if (rng.chance(0.5)) e.carry.push({ item: "medSmall", count: 1 + rng.int(2) });
   if (rng.chance(0.15)) e.carry.push({ item: "medLarge", count: 1 });
@@ -193,7 +197,7 @@ function populate(w: World, c: LoadedChunk) {
       if (lootAt(p, 1.6)) continue;
       const items: Stack[] = [];
       const tilt = tiltAt(p);
-      for (let b = 0; b < BIN_ITEMS; b++) items.push(rollStack(rng, w.preferAmmo, tilt));
+      for (let b = 0; b < BIN_ITEMS; b++) items.push(rollStack(rng, w.runAmmo, tilt));
       addLoot({ pos: { ...p }, kind: "bin", items, opened: false, angle: wallAngle(p) });
       made++;
     }
@@ -205,7 +209,7 @@ function populate(w: World, c: LoadedChunk) {
       const c0 = rng.pick(free);
       const p = { x: c0.x + rng.range(-0.3, 0.3), y: c0.y + rng.range(-0.3, 0.3) };
       if (dist(p, w.startPos) < 6 || lootAt(p, 4)) continue;
-      addLoot({ pos: p, kind: "ground", items: [rollStack(rng, w.preferAmmo)], opened: true, angle: rng.range(0, Math.PI) });
+      addLoot({ pos: p, kind: "ground", items: [rollStack(rng, w.runAmmo)], opened: true, angle: rng.range(0, Math.PI) });
       break;
     }
   }

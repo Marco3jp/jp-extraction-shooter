@@ -76,5 +76,3 @@ export const START_HEALS: [import("./items").ItemId, number][] = [
 ];
 /** ラン開始時にもらう弾薬は、持ち込む武器ごとにマガジン何本分か（仮） */
 export const START_AMMO_MAGS = 3;
-/** 拾える弾薬が、持ち込んだ武器の弾薬に置き換わる確率（仮） */
-export const LOOT_AMMO_BIAS = 0.5;
