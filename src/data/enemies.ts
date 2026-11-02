@@ -3,6 +3,14 @@ import type { WeaponType } from "./weapons";
 
 export const ENEMY_SHIELD = 100;
 
+/**
+ * 保つ間合いより遠い相手に近づく道の選び方。同じグループが同じ道を一列で来て、前の敵の体で後ろの敵に弾が届かなくなるのを避ける
+ * - direct：相手のいる所へまっすぐ向かう
+ * - flank：相手の横へ回り込み、保つ間合いで相手が見える所へ向かう
+ * - perch：今の位置から近い、保つ間合いで相手が見える所へ向かう。相手の正面の線は避ける
+ */
+export type Approach = "direct" | "flank" | "perch";
+
 /** 敵の種類。武器はプレイヤーと同じ武器とアタッチメントの仕組みで作る */
 export const ENEMY = {
   short: {
@@ -12,6 +20,7 @@ export const ENEMY = {
     damageMul: 0.75,
     sight: 30,
     keepDistance: 9,
+    approach: "flank" as Approach,
     aimError: 3.5,
     reaction: 0.45,
     /** 連射の長さと、次の連射までの間（秒） */
@@ -24,6 +33,7 @@ export const ENEMY = {
     damageMul: 0.75,
     sight: 35,
     keepDistance: 16,
+    approach: "direct" as Approach,
     aimError: 2.2,
     reaction: 0.55,
     burst: [0.6, 1.2] as [number, number],
@@ -35,6 +45,7 @@ export const ENEMY = {
     damageMul: 0.6,
     sight: 42,
     keepDistance: 26,
+    approach: "perch" as Approach,
     aimError: 1.2,
     reaction: 0.7,
     burst: [0.8, 1.6] as [number, number],

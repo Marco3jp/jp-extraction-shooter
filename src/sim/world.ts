@@ -59,6 +59,8 @@ export type Ai = {
   burstT: number;
   burstLen: number;
   restT: number;
+  /** 保つ間合いより遠い相手に近づくときの行き先。from は決めたときの相手の位置 */
+  approach: { to: Vec; from: Vec; t: number } | null;
 };
 
 /** ラン中に足したり外したりする修正。until が null なら外すまで続く（パッシブ・バフアイテム） */
@@ -404,7 +406,7 @@ function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
     heals: PARTNER_TACTICS.mode === "classic" ? PARTNER_TACTICS.classicHeals : 0,
     roam: false,
     outmatchedBy: null, playerHitT: -Infinity,
-    burstT: 0, burstLen: 0.8, restT: 0,
+    burstT: 0, burstLen: 0.8, restT: 0, approach: null,
   };
   a.partner = { index, model, reviveT: 0, heading: -Math.PI / 2, healKind: null,
     cover: null, phase: "hide", peekHp: 0, hideHealed: false,

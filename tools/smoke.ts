@@ -20,6 +20,7 @@ import { Rng } from "../src/sim/rng";
 import { makeEnemy, syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
+import { alert, angleDiff } from "../src/sim/ai";
 import {
   applyRunResult, craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutBike, setLoadoutRevive, setLoadoutSecureBag, setLoadoutWeapon, type Profile,
 } from "../src/meta/profile";
@@ -1602,6 +1603,63 @@ section("銃声で寄ってくる敵", () => {
         + `3人組から勢力Aへのダメージ ${Math.round(bToA)}・勢力Aから3人組へ ${Math.round(aToB)}・3人組からタレットへ ${Math.round(bToTurret)}・3人組からプレイヤーへ ${Math.round(bToPlayer)}、40秒後 勢力A ${a.alive ? "生きている" : "倒れた"}・3人組の生き残り ${bs.filter((b) => b.alive).length}人・タレット ${t.alive ? "残っている" : "壊れた"}`,
     );
   }
+});
+
+section("型ごとの近づき方", () => {
+  // 38m 先の3人組（近距離・中距離・遠距離）を、プレイヤーが一番削れている敵から撃ち続ける。
+  // 3秒目からの12秒で、狙った敵の手前にほかの敵が入って弾を受けた割合（狙った敵の残りが 60 以下のときも別に出す）と、プレイヤーから見た敵どうしの角度の開き・型ごとの距離を見る
+  let aimed = 0, blocked = 0, aimedLow = 0, blockedLow = 0, spreadSum = 0, spreadN = 0, placed = 0;
+  const distSum = { short: 0, mid: 0, long: 0 }, distN = { short: 0, mid: 0, long: 0 };
+  for (let seed = 1; seed <= 120; seed++) {
+    const w = createWorld(map, seed, baseLoadout);
+    const p = w.player;
+    w.actors = w.actors.filter((a) => a.team === "player");
+    const rng = new Rng(seed);
+    let gPos: Vec | null = null;
+    for (let k = 0; k < 400 && !gPos; k++) {
+      const ang = rng.range(-Math.PI, Math.PI);
+      const q = { x: p.pos.x + Math.cos(ang) * 38, y: p.pos.y + Math.sin(ang) * 38 };
+      if (w.map.walkable(q.x, q.y) && w.map.los(p.pos, q)) gPos = q;
+    }
+    if (!gPos) continue;
+    placed++;
+    const g = gPos;
+    const es = (["short", "mid", "long"] as const).map((kind) => makeEnemy(w, rng, kind, 1, { x: g.x + rng.range(-2, 2), y: g.y + rng.range(-2, 2) }, 9001, false));
+    w.actors.push(...es);
+    for (const e of es) alert(w, e, p.pos, p, false);
+    const ang = (e: Actor) => Math.atan2(e.pos.y - p.pos.y, e.pos.x - p.pos.x);
+    for (let i = 0; i < 30 * 15; i++) {
+      p.invulnT = 1;
+      const ws = p.weapons[p.cur];
+      ws.mag = ws.def.mag;
+      const seen = es.filter((e) => e.alive && w.map.los(p.pos, e.pos));
+      const target = seen.sort((a, b) => a.shield + a.health - (b.shield + b.health))[0];
+      const low = !!target && target.shield + target.health <= 60;
+      step(w, { ...emptyInput(), aim: target ? { ...target.pos } : { x: p.pos.x + 1, y: p.pos.y }, fire: !!target });
+      if (i < 30 * 3) continue;
+      for (const ev of w.events) {
+        if (ev.type !== "hit" || ev.by !== p.id || !target) continue;
+        if (ev.actor === target.id) aimed++;
+        else blocked++;
+        if (low && ev.actor === target.id) aimedLow++;
+        else if (low) blockedLow++;
+      }
+      const alive = es.filter((e) => e.alive);
+      for (let a = 0; a < alive.length; a++) {
+        distSum[alive[a].kind as keyof typeof distSum] += Math.hypot(alive[a].pos.x - p.pos.x, alive[a].pos.y - p.pos.y);
+        distN[alive[a].kind as keyof typeof distN]++;
+        for (let b = a + 1; b < alive.length; b++) {
+          spreadSum += Math.abs(angleDiff(ang(alive[a]), ang(alive[b]))) * 180 / Math.PI;
+          spreadN++;
+        }
+      }
+    }
+  }
+  const avg = (k: keyof typeof distSum) => (distSum[k] / Math.max(distN[k], 1)).toFixed(0);
+  console.log(
+    `型ごとの近づき方（${placed}回）: 手前の敵に吸われた弾 ${Math.round((blocked / Math.max(aimed + blocked, 1)) * 100)}%（${blocked}/${aimed + blocked}発）・残り 60 以下の敵を狙ったとき ${Math.round((blockedLow / Math.max(aimedLow + blockedLow, 1)) * 100)}%（${blockedLow}/${aimedLow + blockedLow}発）、`
+      + `敵どうしの角度の開き 平均 ${(spreadSum / Math.max(spreadN, 1)).toFixed(0)}°、プレイヤーからの距離 平均 近距離型 ${avg("short")}m・中距離型 ${avg("mid")}m・遠距離型 ${avg("long")}m`,
+  );
 });
 
 section("押されている敵はプレイヤーを後回しにする", () => {

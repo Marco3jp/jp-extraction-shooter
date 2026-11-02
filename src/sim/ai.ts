@@ -198,6 +198,85 @@ function roamTo(w: World, e: Actor): boolean {
   return false;
 }
 
+/** 近づく行き先を決め直す間隔（秒）と、決め直す相手の動き（m） */
+const APPROACH_RETHINK = 1.5;
+const APPROACH_TARGET_MOVED = 4;
+const DEG = Math.PI / 180;
+const FLANK_ANGLES = [70, 90, 50, 110, 30].map((a) => a * DEG);
+/** 相手の正面の線を外した角度を先に探し、無ければ正面寄りも探す */
+const PERCH_ANGLES = [[20, 35, 50, 65], [0, 10]].map((set) => set.map((a) => a * DEG));
+
+/** goal から見て角度 ang・距離 r の所が、歩けて goal が見えるなら返す */
+function spotAround(w: World, goal: Vec, ang: number, r: number): Vec | null {
+  const p = { x: goal.x + Math.cos(ang) * r, y: goal.y + Math.sin(ang) * r };
+  return w.map.walkable(p.x, p.y) && w.map.los(p, goal) ? p : null;
+}
+
+function approachSpot(w: World, e: Actor, goal: Vec): Vec | null {
+  const sp = ENEMY[e.kind as keyof typeof ENEMY];
+  const keep = sp.keepDistance;
+  const bearing = Math.atan2(e.pos.y - goal.y, e.pos.x - goal.x);
+  // 同じグループの近距離型が両側に分かれるように、番号で回り込む側を決める
+  const side = e.id % 2 ? 1 : -1;
+  if (sp.approach === "flank") {
+    for (const r of [keep, keep + 4, keep + 8]) {
+      for (const a of FLANK_ANGLES) {
+        for (const s of [side, -side]) {
+          const p = spotAround(w, goal, bearing + s * a, r);
+          if (p) return p;
+        }
+      }
+    }
+    return null;
+  }
+  for (const angles of PERCH_ANGLES) {
+    let best: Vec | null = null;
+    let bestD = Infinity;
+    for (const r of [keep, keep - 4, keep + 3, keep - 8]) {
+      for (const a of angles) {
+        for (const s of [1, -1]) {
+          const p = spotAround(w, goal, bearing + s * a, r);
+          if (p && dist(p, e.pos) < bestD) {
+            best = p;
+            bestD = dist(p, e.pos);
+          }
+        }
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+/**
+ * 保つ間合いより遠い goal（相手の位置か、見失った位置）へ近づく速度。行き先は型の近づき方で決める。
+ * 近づき方で決めた行き先へ向かわないときは null
+ */
+function approachVel(w: World, e: Actor, goal: Vec, speed: number): Vec | null {
+  const ai = e.ai!;
+  const style = ENEMY[e.kind as keyof typeof ENEMY].approach;
+  if (style === "direct") return null;
+  const a = ai.approach;
+  if (a) a.t -= DT;
+  if (!a || a.t <= 0 || dist(a.from, goal) > APPROACH_TARGET_MOVED) {
+    const to = approachSpot(w, e, goal);
+    ai.approach = to ? { to, from: { ...goal }, t: APPROACH_RETHINK } : null;
+  }
+  if (!ai.approach) return null;
+  const vel = seek(w, e, ai.approach.to, speed);
+  if (!ai.path.length) {
+    if (dist(e.pos, ai.approach.to) < 1.5) {
+      ai.why = "相手が見える所で待つ";
+      turnTo(e, Math.atan2(goal.y - e.pos.y, goal.x - e.pos.x), 4);
+      return { x: 0, y: 0 };
+    }
+    ai.approach = null;
+    return null;
+  }
+  ai.why = style === "flank" ? "横へ回り込んで近づく" : "相手が見える離れた所へ移る";
+  return vel;
+}
+
 export function findCover(w: World, e: Actor, threat: Vec): Vec | null {
   let best: Vec | null = null;
   let bestScore = -Infinity;
@@ -445,7 +524,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
             vel = { x: -Math.cos(toT) * speed, y: -Math.sin(toT) * speed };
           } else if (d > keep + 4) {
             ai.why = "保つ間合いより遠いので近づく";
-            vel = seek(w, e, t.pos, speed);
+            vel = approachVel(w, e, t.pos, speed) ?? seek(w, e, t.pos, speed);
           } else if (d < keep - 3) {
             ai.why = "保つ間合いより近いので離れる";
             vel = { x: -Math.cos(toT) * speed * 0.8, y: -Math.sin(toT) * speed * 0.8 };
@@ -465,7 +544,9 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
           ai.why = "最後に見た所の周りを見回す";
           if (dist(e.pos, ai.lastSeen) > 1.5) {
             ai.why = "最後に見た所へ向かう";
-            vel = seek(w, e, ai.lastSeen, ENEMY_SPEED.move);
+            // 遠距離型は近くまで来ても、見失った所へは踏み込まずに見える所を探す
+            const far = dist(e.pos, ai.lastSeen) > sp.keepDistance + 4 || ENEMY[e.kind as keyof typeof ENEMY].approach === "perch";
+            vel = (far ? approachVel(w, e, ai.lastSeen, ENEMY_SPEED.move) : null) ?? seek(w, e, ai.lastSeen, ENEMY_SPEED.move);
             if (Math.hypot(vel.x, vel.y) > 0.1) turnTo(e, Math.atan2(vel.y, vel.x), 6);
           } else {
             turnTo(e, e.facing + 1, 2);

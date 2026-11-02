@@ -46,7 +46,7 @@ export function makeEnemy(w: World, rng: Rng, kind: EnemyKind, faction: number, 
     heals: 2,
     roam,
     outmatchedBy: null, playerHitT: -Infinity,
-    burstT: 0, burstLen: 0.8, restT: 0,
+    burstT: 0, burstLen: 0.8, restT: 0, approach: null,
   };
   for (let i = 0; i < 2; i++) {
     const s = rollAmmo(rng, w.runAmmo);
