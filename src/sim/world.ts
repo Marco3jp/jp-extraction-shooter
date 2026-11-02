@@ -19,8 +19,17 @@ export type Heal = { kind: HealKind; t: number; total: number; items: number };
 /** patrol〜push は敵、follow〜return はパートナー */
 export type AiState = "patrol" | "engage" | "retreat" | "push" | "follow" | "fight" | "heal" | "return";
 
+/**
+ * 引き金を引いていない理由（確かめる画面に出すだけで、動きには使わない）。
+ * fire は引いている。busy はリロード・回復・持ち替えの最中、move は逃げているなど撃つ処理まで行っていない
+ */
+export type Hold = "fire" | "noTarget" | "unseen" | "react" | "range" | "aim" | "rest" | "move";
+
 export type Ai = {
   state: AiState;
+  /** 今していること（確かめる画面に出すだけで、動きには使わない） */
+  why: string;
+  hold: Hold;
   group: number;
   home: Vec;
   path: Vec[];
@@ -386,7 +395,7 @@ function makePartner(id: number, index: number, model: 1 | 2, pos: Vec): Actor {
   a.shield = a.shieldMax;
   for (const ws of a.weapons) ws.mag = ws.def.mag;
   a.ai = {
-    state: "follow", group: -1, home: { ...pos },
+    state: "follow", why: "", hold: "noTarget", group: -1, home: { ...pos },
     path: [], pathTarget: null, repathT: 0,
     target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: 0, reactT: 0,
     strafe: 1, strafeT: 0, stateT: 0, waitT: 0,

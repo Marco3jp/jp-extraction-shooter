@@ -5,11 +5,11 @@ import type { Actor, World } from "./world";
 
 const SCAN_INTERVAL = 0.2;
 /** 見失ってから巡回に戻るまで */
-const FORGET_AFTER = 8;
+export const FORGET_AFTER = 8;
 /** ほかの勢力と撃ち合っているとき、両方の強さを比べるために仲間を数える範囲（m） */
 const SIDE_RADIUS = 40;
 /** プレイヤーの側に撃たれたら、この秒数はほかの勢力に押されていてもプレイヤーの側を狙う */
-const PROVOKED_FOR = 6;
+export const PROVOKED_FOR = 6;
 
 const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -68,9 +68,23 @@ function strongerRival(w: World, e: Actor, byId: Map<number, Actor>): Actor | nu
  * ほかの勢力に押されている間は、手を出してこないプレイヤーの側を後回しにする。
  * 押している勢力を先に片付けたほうが、残ったプレイヤーと撃ち合うときに有利なので
  */
-function ignoresPlayer(w: World, e: Actor) {
+export function ignoresPlayer(w: World, e: Actor) {
   const ai = e.ai!;
   return e.team === "enemy" && ai.outmatchedBy !== null && w.time - ai.playerHitT > PROVOKED_FOR;
+}
+
+/** 狙う相手へ撃てる向き・距離・反応時間になっているか。撃たないときは理由を ai.hold に残す */
+export function aimReady(e: Actor, d: number, toT: number, tolerance: number): boolean {
+  const ai = e.ai!;
+  if (!ai.canSee) ai.hold = "unseen";
+  else if (ai.reactT > 0) ai.hold = "react";
+  else if (d > weapon(e).def.range) ai.hold = "range";
+  else if (Math.abs(angleDiff(e.facing, toT)) >= tolerance) ai.hold = "aim";
+  else {
+    ai.hold = "fire";
+    return true;
+  }
+  return false;
 }
 
 /** at に敵がいると知らせる。source が分かっていれば狙う相手にする */
@@ -348,27 +362,34 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
   } else if (ai.reactT < sp.reaction * 0.5) {
     ai.reactT = sp.reaction * 0.5;
   }
+  ai.hold = !t ? "noTarget" : ai.canSee ? "move" : "unseen";
 
   let vel: Vec = { x: 0, y: 0 };
   let trigger = false;
   const toT = t ? Math.atan2(t.pos.y - e.pos.y, t.pos.x - e.pos.x) : e.facing;
 
-  const escape = grenadeEscape(w, e, t) ?? fireEscape(w, e, t);
+  const fromGrenade = grenadeEscape(w, e, t);
+  const escape = fromGrenade ?? fireEscape(w, e, t);
   if (escape && e.heal) cancelHeal(w, e);
 
   if (e.heal) {
-    if (t && ai.canSee && d < 7 && e.health > 35) cancelHeal(w, e);
-    else if (t && ai.canSee) {
+    ai.why = "回復している";
+    if (t && ai.canSee && d < 7 && e.health > 35) {
+      cancelHeal(w, e);
+      ai.why = "近いので回復をやめる";
+    } else if (t && ai.canSee) {
       vel = { x: -Math.cos(toT) * HEAL_MOVE_SPEED, y: -Math.sin(toT) * HEAL_MOVE_SPEED };
+      ai.why = "回復しながら下がる";
     }
   }
 
   if (!e.heal) {
     switch (ai.state) {
       case "patrol": {
+        ai.why = "巡回で立ち止まっている";
         ai.waitT -= DT;
         if (ai.waitT <= 0 && (!ai.pathTarget || dist(e.pos, ai.pathTarget) < 1)) {
-          if (ai.roam && dist(e.pos, ai.home) < 20 && w.rng.chance(ROAM_CHANCE) && isLeader(w, e)) roamTo(w, e);
+          if (ai.roam && dist(e.pos, ai.home) < 20 && w.rng.chance(ROAM_CHANCE) && isLeader(w, e) && roamTo(w, e)) ai.why = "巡回の中心を遠くへ移す";
           for (let k = 0; k < 10; k++) {
             const q = { x: ai.home.x + w.rng.range(-18, 18), y: ai.home.y + w.rng.range(-18, 18) };
             if (w.map.walkable(q.x, q.y)) {
@@ -381,6 +402,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
           ai.waitT = w.rng.range(1.5, 4);
         } else if (ai.pathTarget && dist(e.pos, ai.pathTarget) >= 1) {
           const far = dist(e.pos, ai.home) > 30;
+          ai.why = far ? "遠くの巡回先へ移っている" : "巡回している";
           vel = seek(w, e, ai.pathTarget, far ? ENEMY_SPEED.move * 0.7 : ENEMY_SPEED.patrol);
           // 探索の上限までに道が見つからなかった。同じ行き先を探し直し続けると重いので、今いる所を巡回の中心にする
           if (!ai.path.length) {
@@ -393,6 +415,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
       }
       case "engage": {
         if (!ai.canSee && (!ai.lastSeen || w.time - ai.lastSeenT > FORGET_AFTER)) {
+          ai.why = "見失ったので巡回に戻る";
           ai.state = "patrol";
           ai.target = null;
           ai.pathTarget = null;
@@ -401,6 +424,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
           break;
         }
         if (e.shield <= 0 && e.health < 60 && ai.heals > 0) {
+          ai.why = "シールドが割れたので下がる";
           ai.state = "retreat";
           ai.pathTarget = null;
           ai.stateT = 6;
@@ -408,6 +432,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
         }
         const exposed = !!t && (t.heal !== null || t.reloadT > 0);
         if (t && ai.canSee && exposed && e.shield + e.health >= 120 && d < 30) {
+          ai.why = "相手が回復・リロード中なので詰める";
           ai.state = "push";
           ai.stateT = 2.5;
           break;
@@ -416,12 +441,16 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
           const keep = sp.keepDistance;
           const speed = ENEMY_SPEED.move;
           if (e.reloadT > 0 && d < keep + 5) {
+            ai.why = "リロード中なので下がる";
             vel = { x: -Math.cos(toT) * speed, y: -Math.sin(toT) * speed };
           } else if (d > keep + 4) {
+            ai.why = "保つ間合いより遠いので近づく";
             vel = seek(w, e, t.pos, speed);
           } else if (d < keep - 3) {
+            ai.why = "保つ間合いより近いので離れる";
             vel = { x: -Math.cos(toT) * speed * 0.8, y: -Math.sin(toT) * speed * 0.8 };
           } else {
+            ai.why = "間合いを保って横に動く";
             ai.strafeT -= DT;
             if (ai.strafeT <= 0) {
               ai.strafe = w.rng.chance(0.5) ? 1 : -1;
@@ -431,9 +460,11 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
             vel = { x: -Math.sin(toT) * s, y: Math.cos(toT) * s };
           }
           turnTo(e, toT, 7);
-          trigger = ai.reactT <= 0 && d <= weapon(e).def.range && Math.abs(angleDiff(e.facing, toT)) < 0.12;
+          trigger = aimReady(e, d, toT, 0.12);
         } else if (ai.lastSeen) {
+          ai.why = "最後に見た所の周りを見回す";
           if (dist(e.pos, ai.lastSeen) > 1.5) {
+            ai.why = "最後に見た所へ向かう";
             vel = seek(w, e, ai.lastSeen, ENEMY_SPEED.move);
             if (Math.hypot(vel.x, vel.y) > 0.1) turnTo(e, Math.atan2(vel.y, vel.x), 6);
           } else {
@@ -448,10 +479,12 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
           const cover = findCover(w, e, threat);
           ai.stateT = 6;
           if (cover) {
+            ai.why = "遮蔽へ下がる";
             ai.path = [];
             ai.pathTarget = null;
             vel = seek(w, e, cover, ENEMY_SPEED.move);
           } else {
+            ai.why = "遮蔽が無いのでその場で回復する";
             if (startHeal(w, e, "cellBatch")) ai.heals--;
             ai.state = "engage";
           }
@@ -459,11 +492,13 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
         }
         const arrived = dist(e.pos, ai.pathTarget) < 1;
         if (arrived || (!ai.canSee && w.time - ai.lastSeenT > 0.8)) {
+          ai.why = "遮蔽に着いたので回復する";
           const kind = e.shield >= 50 && e.health < 60 ? "medSmall" : "cellBatch";
           if (startHeal(w, e, kind)) ai.heals--;
           ai.state = "engage";
           ai.pathTarget = null;
         } else {
+          ai.why = "遮蔽へ下がる";
           vel = seek(w, e, ai.pathTarget, ENEMY_SPEED.move);
           if (Math.hypot(vel.x, vel.y) > 0.1) turnTo(e, Math.atan2(vel.y, vel.x), 6);
         }
@@ -472,13 +507,15 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
       case "push": {
         const exposed = !!t && (t.heal !== null || t.reloadT > 0);
         if (!t || ai.stateT <= 0 || (!exposed && ai.stateT < 1.5)) {
+          ai.why = "隙が終わったので詰めるのをやめる";
           ai.state = "engage";
           break;
         }
+        ai.why = "相手の隙に詰めている";
         vel = d < 4 ? { x: 0, y: 0 } : seek(w, e, t.pos, ENEMY_SPEED.push);
         if (ai.canSee) {
           turnTo(e, toT, 8);
-          trigger = ai.reactT <= 0 && d <= weapon(e).def.range && Math.abs(angleDiff(e.facing, toT)) < 0.15;
+          trigger = aimReady(e, d, toT, 0.15);
         }
         break;
       }
@@ -486,6 +523,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
   }
 
   if (escape) {
+    ai.why = fromGrenade ? "グレネードから逃げる" : "炎の外へ出る";
     const dx = escape.x - e.pos.x, dy = escape.y - e.pos.y;
     const l = Math.hypot(dx, dy) || 1;
     vel = { x: (dx / l) * ENEMY_SPEED.push, y: (dy / l) * ENEMY_SPEED.push };
@@ -511,6 +549,7 @@ export function updateEnemy(w: World, e: Actor, byId: Map<number, Actor>) {
 
   if (ai.restT > 0) {
     ai.restT -= DT;
+    if (trigger) ai.hold = "rest";
     trigger = false;
   }
   if (trigger) {

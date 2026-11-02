@@ -26,6 +26,8 @@ export class InputState {
   /** E キー。true を返したら（箱の中身を取ったなど）ゲームには渡さない */
   onInteract: () => boolean = () => false;
   onDebug: (key: "sight" | "beacon") => void = () => {};
+  /** I キー。キャラの判断や補正を確かめる画面を開く・閉じる */
+  onInspect: () => void = () => {};
   onRestart: () => void = () => {};
   /** 画面（持ち物の画面の外）を左クリックしたとき。true を返したら撃たない */
   onClick: () => boolean = () => false;
@@ -58,6 +60,7 @@ export class InputState {
         case "KeyP": this.onPauseKey(); break;
         case "KeyN": this.onDebug("sight"); break;
         case "KeyB": this.onDebug("beacon"); break;
+        case "KeyI": this.onInspect(); break;
         case "Enter": this.onRestart(); break;
       }
       if (HEAL_KEYS[e.code]) this.pending.heal = HEAL_KEYS[e.code];

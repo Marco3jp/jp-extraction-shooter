@@ -39,7 +39,7 @@ export function makeEnemy(w: World, rng: Rng, kind: EnemyKind, faction: number, 
   const e = makeActor(w.nextId++, "enemy", kind, faction, pos, [enemyWeapon(kind)], ENEMY_SHIELD);
   e.facing = rng.range(-Math.PI, Math.PI);
   e.ai = {
-    state: "patrol", group, home: { ...pos },
+    state: "patrol", why: "", hold: "noTarget", group, home: { ...pos },
     path: [], pathTarget: null, repathT: 0,
     target: null, lastSeen: null, lastSeenT: 0, canSee: false, scanT: rng.next() * 0.2, reactT: 0,
     strafe: 1, strafeT: 0, stateT: 0, waitT: rng.range(0, 3),

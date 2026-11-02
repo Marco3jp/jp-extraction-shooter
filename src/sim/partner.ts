@@ -1,5 +1,5 @@
 import { flying } from "./evac";
-import { angleDiff, findCover, fireEscape, grenadeEscape, scan, seek, turnTo } from "./ai";
+import { aimReady, angleDiff, findCover, fireEscape, grenadeEscape, scan, seek, turnTo } from "./ai";
 import { burnMul, cancelHeal, pullTrigger, releaseTrigger, startHeal, startReload, weapon } from "./combat";
 import {
   DT, HEAL_MOVE_SPEED, HEALTH_MAX, MOVE_SPEED, PARTNER, PARTNER_CATCH_UP, PARTNER_COVER, PARTNER_COVER_DIST, PARTNER_FOCUS_TIME, PARTNER_HEAL, PARTNER_LEASH, PARTNER_TACTICS, PARTNER_WIN_MARGIN,
@@ -10,7 +10,7 @@ import type { Actor, World } from "./world";
 
 const SCAN_INTERVAL = 0.2;
 /** 見失ってから狙う相手を忘れるまで */
-const FORGET_AFTER = 8;
+export const FORGET_AFTER = 8;
 /** 付く位置の向きを、プレイヤーの向きへ寄せる速さ（rad/秒）。マウスを振るたびに左右が入れ替わらないように遅くする */
 const HEADING_RATE = 1.5;
 /** 付く位置からこれ以上離れていたら走る。さらに catchUpFrom より離れていたら、プレイヤーが走るより少し速く走って追いつく */
@@ -164,10 +164,12 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
       t = undefined;
     }
   }
+  ai.hold = !t ? "noTarget" : ai.canSee ? "move" : "unseen";
 
   const dP = dist(e.pos, p.pos);
   // プレイヤーが長距離移動で飛んでいる間は移さず、降りてから後ろへ移す
   if (dP > PARTNER_CATCH_UP.warp && ai.state !== "fight" && !flying(p)) {
+    ai.why = "離れすぎたのでプレイヤーの後ろへ移った";
     warpBehind(w, e);
     return;
   }
@@ -181,7 +183,8 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   if (ai.state === "follow" && t && ai.canSee) ai.state = "fight";
   if (ai.state === "fight" && !t) ai.state = "follow";
 
-  const escape = grenadeEscape(w, e, t) ?? fireEscape(w, e, t);
+  const fromGrenade = grenadeEscape(w, e, t);
+  const escape = fromGrenade ?? fireEscape(w, e, t);
   if (escape && e.heal) cancelHeal(w, e);
   if (e.heal && t && ai.canSee && d < PARTNER_HEAL.closeRange && e.health > 35) cancelHeal(w, e);
   if (!e.heal && !escape && ai.state !== "return" && ai.state !== "heal") {
@@ -217,12 +220,14 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
   };
 
   if (e.heal) {
+    ai.why = "回復している";
     // 巻いている間は、隠れる所か付く位置へゆっくり寄る
     const to = ai.state === "fight" && ps.cover ? ps.cover.hide : slotPos(w, e);
     if (dist(e.pos, to) > 0.5) vel = seek(w, e, to, HEAL_MOVE_SPEED);
   } else {
     switch (ai.state) {
       case "return": {
+        ai.why = "離れすぎたので撃ち合いをやめて戻る";
         const chase = Math.min(PARTNER_CATCH_UP.chaseMax, Math.hypot(p.vel.x, p.vel.y) * 1.1);
         vel = seek(w, e, p.pos, Math.max(run * CATCH_UP_MUL, chase));
         faceMove();
@@ -234,20 +239,24 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
           const cover = ps.cover && !w.map.los(ps.cover.hide, threat) ? ps.cover.hide : findCover(w, e, threat);
           ai.stateT = 6;
           if (cover && dist(cover, p.pos) < PARTNER_LEASH * 0.6) {
+            ai.why = "遮蔽へ引いて回復する";
             ai.path = [];
             ai.pathTarget = null;
             vel = seek(w, e, cover, run);
           } else {
+            ai.why = "近くに遮蔽が無いのでその場で回復する";
             if (startHeal(w, e, ps.healKind ?? "cellBatch")) ai.heals--;
             ai.state = "follow";
           }
           break;
         }
         if (dist(e.pos, ai.pathTarget) < 1 || (!ai.canSee && w.time - ai.lastSeenT > 0.8)) {
+          ai.why = "遮蔽に着いたので回復する";
           if (startHeal(w, e, ps.healKind ?? "cellBatch")) ai.heals--;
           ai.state = "follow";
           ai.pathTarget = null;
         } else {
+          ai.why = "遮蔽へ引いて回復する";
           vel = seek(w, e, ai.pathTarget, run);
           faceMove();
         }
@@ -256,6 +265,7 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
       case "follow": {
         const slot = slotPos(w, e);
         const ds = dist(e.pos, slot);
+        ai.why = ds > CATCH_UP_FROM ? "付く位置から離れたので追いつく" : ds > 1 ? "付く位置へ寄る" : t ? "見失った相手の方を向いて待つ" : "付く位置にいる";
         if (ds > 1) vel = seek(w, e, slot, ds > CATCH_UP_FROM ? run * CATCH_UP_MUL : ds > RUN_FROM || p.sprinting ? run : walk);
         if (t && ai.lastSeen) turnTo(e, Math.atan2(ai.lastSeen.y - e.pos.y, ai.lastSeen.x - e.pos.x), 6);
         else if (Math.hypot(vel.x, vel.y) > 0.1) faceMove();
@@ -284,6 +294,7 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
             ps.hideHealed = false;
           }
           let to = cv.hide;
+          ai.why = ps.phase === "peek" ? "遮蔽から出て撃つ" : "遮蔽に隠れている";
           if (ps.phase === "peek") {
             // 止まっていると当たりやすいので、出た所と、隠れる所寄りの所の間を行き来しながら撃つ
             const k = (Math.sin(w.time * 2.4 + e.id) + 1) / 2;
@@ -294,9 +305,13 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
           if (dd > 0.3) vel = seek(w, e, to, dd > 4 ? run : walk);
           turnTo(e, toT, 7);
           // 遮蔽へ向かう間も、見えていれば撃つ
-          trigger = ai.canSee && ai.reactT <= 0 && d <= weapon(e).def.range && Math.abs(angleDiff(e.facing, toT)) < 0.12;
+          trigger = aimReady(e, d, toT, 0.12);
           break;
         }
+        ai.why = p.heal ? "プレイヤーが巻いているので前に出て撃つ"
+          : ps.cover ? "撃ち合いに勝っているのでその場で撃つ"
+          : PARTNER_TACTICS.mode === "classic" ? "前の作りなので遮蔽を使わずに撃ち合う"
+          : "隠れる所が無いのでその場で撃ち合う";
         // 隠れる所が無いときと、プレイヤーが巻いている間は、その場で撃ち合う。巻いている間はプレイヤーと敵の間に出る
         let anchor = slot;
         if (p.heal) {
@@ -315,13 +330,14 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
           vel = { x: -Math.sin(toT) * s, y: Math.cos(toT) * s };
         }
         turnTo(e, toT, 7);
-        trigger = ai.canSee && ai.reactT <= 0 && d <= weapon(e).def.range && Math.abs(angleDiff(e.facing, toT)) < 0.12;
+        trigger = aimReady(e, d, toT, 0.12);
         break;
       }
     }
   }
 
   if (escape) {
+    ai.why = fromGrenade ? "グレネードから逃げる" : "炎の外へ出る";
     const dx = escape.x - e.pos.x, dy = escape.y - e.pos.y;
     const l = Math.hypot(dx, dy) || 1;
     vel = { x: (dx / l) * run, y: (dy / l) * run };
@@ -342,6 +358,7 @@ export function updatePartner(w: World, e: Actor, byId: Map<number, Actor>) {
 
   if (ai.restT > 0) {
     ai.restT -= DT;
+    if (trigger) ai.hold = "rest";
     trigger = false;
   }
   if (trigger) {

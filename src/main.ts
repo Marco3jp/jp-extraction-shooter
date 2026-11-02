@@ -2,6 +2,7 @@ import "./style.css";
 import "./layout.css";
 import { Sfx } from "./audio";
 import { Hud } from "./hud";
+import { Inspector } from "./inspect";
 import { InputState } from "./input";
 import { Renderer } from "./render/renderer";
 import { DT, MATERIALS, type MaterialId } from "./sim/data";
@@ -39,9 +40,12 @@ async function main() {
   let world: World = createWorld(map, 1, makeRunLoadout(profile, map.index.id));
   const hud = new Hud(world, mapView);
   hud.onCommand = (c) => input.command(c);
+  const inspector = new Inspector();
   let mode: Mode = "hub";
   let acc = 0;
   let last = performance.now();
+  /** ポーズした時の狙い。カメラはカーソルの方へ寄るので、ポーズ中に止めておかないとキャラを選ぼうとしたときに画面がずれる */
+  let pausedAim = { x: 0, y: 0 };
 
   const persist = () => {
     void saveProfile(profile);
@@ -76,6 +80,7 @@ async function main() {
       <tr><td>M</td><td>地図</td></tr>
       <tr><td>Esc / P</td><td>閉じる / ポーズ</td></tr>
       <tr><td>N / B</td><td>試作用：視線とビーコンで見える情報の段階を切り替え</td></tr>
+      <tr><td>I</td><td>調整用：キャラの判断・ステータス・補正を確かめる画面（URL に ?inspect を付けると最初から開く。ポーズ中はキャラをクリックして選べる）</td></tr>
     </table>`;
 
   const drawHub = () => {
@@ -123,6 +128,7 @@ async function main() {
 
   const showHub = () => {
     mode = "hub";
+    inspector.setPaused(false);
     input.enabled = false;
     input.clearHeld();
     hud.closePanel();
@@ -141,6 +147,7 @@ async function main() {
     last = performance.now();
     acc = 0;
     showOverlay(null);
+    inspector.setPaused(false);
   };
 
   let deploying = false;
@@ -162,8 +169,14 @@ async function main() {
   const pause = () => {
     if (mode !== "playing") return;
     mode = "paused";
+    pausedAim = renderer.screenToWorld(input.mouse.x, input.mouse.y);
     input.clearHeld();
-    showOverlay(`<h1>ポーズ</h1>${controls}<p class="hint">Esc / P / クリックで再開</p>
+    showPauseView();
+  };
+  // 確かめる画面を開いているときは、画面を隠さずにキャラを選べるようにする
+  const showPauseView = () => {
+    inspector.setPaused(inspector.enabled);
+    showOverlay(inspector.enabled ? null : `<h1>ポーズ</h1>${controls}<p class="hint">Esc / P / クリックで再開</p>
       <button class="retire" data-retire>リタイアして拠点に戻る（死んだときと同じく、拾った物を失う）</button>`);
   };
   const togglePause = () => {
@@ -220,6 +233,10 @@ async function main() {
   };
   // 持ち物の画面は、画面の外をクリックしたら閉じる
   input.onClick = () => {
+    if (mode === "paused" && inspector.enabled) {
+      inspector.pickAt(world, renderer, input.mouse);
+      return true;
+    }
     if (mode !== "playing" || !hud.panel.open) return false;
     hud.closePanel();
     return true;
@@ -247,6 +264,11 @@ async function main() {
       }
     }
     return false;
+  };
+  input.onInspect = () => {
+    if (mode !== "playing" && mode !== "paused") return;
+    inspector.toggle();
+    if (mode === "paused") showPauseView();
   };
   input.onDebug = (k) => {
     if (mode !== "playing") return;
@@ -277,7 +299,7 @@ async function main() {
   showHub();
   if (import.meta.env.DEV) {
     Object.assign(window, {
-      __game: { get world() { return world; }, get profile() { return profile; }, start: deploy, renderer, hud },
+      __game: { get world() { return world; }, get profile() { return profile; }, start: deploy, renderer, hud, inspector },
     });
   }
 
@@ -308,9 +330,10 @@ async function main() {
       }
     }
     if (mode !== "hub") {
-      const aim = renderer.screenToWorld(input.mouse.x, input.mouse.y);
+      const aim = mode === "paused" ? pausedAim : renderer.screenToWorld(input.mouse.x, input.mouse.y);
       renderer.render(world, mode === "playing" ? acc / DT : 1, aim, dt, mode === "playing" ? input.aimingThrow : null);
       hud.update(world, renderer, input.mouse, dt);
+      inspector.update(world, renderer, input.mouse, dt);
     }
     requestAnimationFrame(frame);
   };
