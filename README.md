@@ -35,3 +35,4 @@ Overpass API から取るときは `npm run fetch-map -- tools/maps/akihabara.js
 - [docs/design.md](docs/design.md)：ゲーム内容。決まっていることと、決めること
 - [docs/tech.md](docs/tech.md)：技術の方針と、遊んで確かめること
 - [docs/roadmap.md](docs/roadmap.md)：拡張の計画
+- [src/data/patchnotes.ts](src/data/patchnotes.ts)：バージョンと更新履歴。拠点の「更新履歴」タブに出る。版を上げたら package.json の version も揃える

@@ -479,3 +479,28 @@
 .hub-chip.static {
   cursor: default;
 }
+
+.hub-header .hub-version {
+  margin-left: -16px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.hub-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+}
+.hub-notes-date {
+  margin-left: 10px;
+  color: var(--muted, #9aa0aa);
+  font-size: 12px;
+  font-weight: 400;
+}
+.hub-root .hub-notes-list {
+  padding-left: 1.2em;
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

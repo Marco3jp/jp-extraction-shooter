@@ -1,22 +1,25 @@
 import { useState } from "preact/hooks";
 import { ITEMS, MATERIALS } from "../../data/items";
+import { GAME_VERSION } from "../../data/patchnotes";
 import { CampPicker } from "./CampPicker";
 import { Craft } from "./Craft";
 import { formatMoney, formatTime } from "./format";
 import { Loadout } from "./Loadout";
+import { PatchNotes } from "./PatchNotes";
 import { Amounts, Icon } from "./parts";
 import { SaveTab } from "./SaveTab";
 import { Stash } from "./Stash";
 import type { HubProps, LastRunSummary } from "./types";
 import type { Haul } from "../../meta/profile";
 
-type Tab = "loadout" | "craft" | "stash" | "save";
+type Tab = "loadout" | "craft" | "stash" | "save" | "notes";
 
 const TABS: { id: Tab; name: string }[] = [
   { id: "loadout", name: "出撃準備" },
   { id: "craft", name: "クラフト" },
   { id: "stash", name: "保管庫" },
   { id: "save", name: "セーブ" },
+  { id: "notes", name: "更新履歴" },
 ];
 
 export function Hub(props: HubProps) {
@@ -26,6 +29,7 @@ export function Hub(props: HubProps) {
     <div class="hub-root">
       <header class="hub-header">
         <h1>拠点</h1>
+        <span class="hub-version muted">v{GAME_VERSION}</span>
         <nav class="hub-tabs">
           {TABS.map((t) => (
             <button class={`hub-tab${tab === t.id ? " selected" : ""}`} onClick={() => setTab(t.id)}>
@@ -61,6 +65,7 @@ export function Hub(props: HubProps) {
         {tab === "craft" && <Craft profile={profile} onChange={props.onChange} />}
         {tab === "stash" && <Stash profile={profile} />}
         {tab === "save" && <SaveTab onExport={props.onExport} onImport={props.onImport} onReset={props.onReset} />}
+        {tab === "notes" && <PatchNotes />}
       </main>
     </div>
   );
