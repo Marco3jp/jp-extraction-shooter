@@ -37,6 +37,8 @@ const FIXED_RAIL_END_COLOR = 0xc8f5ff;
 const TRAVEL_DRAW_RANGE = 70;
 const RAIL_DRAW_MAX = 64;
 const PAD_DRAW_MAX = 96;
+/** 脱出地点の光の柱。円が広いので、柱は地点の目印として細くする */
+const EXTRACT_BEAM_RADIUS = 4;
 
 function closestOnSegment(p: Vec, a: Vec, b: Vec): Vec {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -694,11 +696,11 @@ export class Renderer {
   private drawExtracts(w: World) {
     while (this.extractMarks.length < w.extracts.length) {
       const beam = new THREE.Mesh(
-        new THREE.CylinderGeometry(EXTRACT_RADIUS, EXTRACT_RADIUS, 30, 48, 1, true),
+        new THREE.CylinderGeometry(EXTRACT_BEAM_RADIUS, EXTRACT_BEAM_RADIUS, 30, 48, 1, true),
         new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false }),
       );
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(EXTRACT_RADIUS - 0.3, EXTRACT_RADIUS, 64),
+        new THREE.RingGeometry(EXTRACT_RADIUS - 0.3, EXTRACT_RADIUS, 128),
         new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
       );
       ring.rotation.x = -Math.PI / 2;
