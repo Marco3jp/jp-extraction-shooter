@@ -290,10 +290,10 @@ export type Defense = {
   extract: Extract;
   /** カバンの中身のうち、送り終えた割合（0〜EXTRACT_DEFENSE.secureShare） */
   share: number;
-  /** 寄せる敵のグループ。at は呼んだ時からの秒数 */
+  /** 置く敵のグループ。at は呼んだ時からの秒数 */
   waves: { at: number; faction: number; angle: number; done: boolean }[];
-  /** 寄せた敵と、その敵が目指す所 */
-  rally: Map<number, Vec>;
+  /** 次に呼んだ音を鳴らす時刻 */
+  nextCall: number;
   startedAt: number;
 };
 

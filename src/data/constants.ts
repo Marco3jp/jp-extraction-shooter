@@ -24,15 +24,15 @@ export const EXTRACT_CALL_TIME = 45;
 /**
  * 迎えを待つ間の防衛。数値は仮
  * - 脱出地点の円の中にいる間だけ、カバンのお金・素材・蘇生アイテムを secureShare まで少しずつ送る。送った分は死んでも持ち帰れる
- * - 呼んだ時から waves 秒後に、wave の距離から敵のグループを1つずつ寄せる。勢力は交互にして、着いた勢力どうしも撃ち合わせる
- * - 寄ってくる敵は、脱出地点から rally m の、来た側の所を目指す
+ * - 迎えが来るまで callEvery 秒ごとに、呼んだ音を EXTRACT_CALL_HEAR m まで鳴らす。聞いた敵は遠くの銃声を聞いたときと同じく脱出地点へ寄り、見えた相手とはいつもどおり撃ち合う
+ * - 呼んだ時から waves 秒後に、wave の距離に敵のグループを1つずつ置く。勢力は交互にして、着いた勢力どうしも撃ち合わせる
  * - 脱出地点の周りに壁を立てる。inner は脱出地点のすぐ周り、outer はその外に散らばる遮蔽
  */
 export const EXTRACT_DEFENSE = {
   secureShare: 0.6,
   waves: [0, 8, 16],
-  wave: [50, 70] as [number, number],
-  rally: 16,
+  callEvery: 4,
+  wave: [70, 100] as [number, number],
   inner: { count: 4, radius: 7, length: 4, hp: 600 },
   outer: { count: 7, radius: [13, 22] as [number, number], length: 3, hp: 400 },
   /** 迎えが来てから壁が消えるまで */
@@ -41,7 +41,7 @@ export const EXTRACT_DEFENSE = {
 /** 脱出地点の円の半径。防衛で立てる壁が全部入るように、一番外の壁の端まで取る */
 export const EXTRACT_RADIUS = Math.ceil(EXTRACT_DEFENSE.outer.radius[1] + EXTRACT_DEFENSE.outer.length / 2);
 /** 呼んだ音が届いて、敵が寄ってくる距離（仮） */
-export const EXTRACT_CALL_HEAR = 60;
+export const EXTRACT_CALL_HEAR = 120;
 /** 脱出した地点から、キャンプを置ける距離（仮） */
 export const CAMP_RADIUS = 250;
 export const PICKUP_RANGE = 2.2;

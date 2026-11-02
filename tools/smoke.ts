@@ -1412,6 +1412,8 @@ section("脱出の防衛", () => {
     const known = new Set(w.actors.map((a) => a.id));
     // 死なないようにして、迎えが来るまで円の中に立つ。途中の 8 秒は円の外に出る
     let infight = 0, byPlayerSide = 0, shareOut = 0, shareIn = 0, waveDmg = 0, dmgToPlayer = 0;
+    // 寄せた敵が中心に固まっていないか。生きている敵の1ティックずつを数える
+    let samples = 0, nearCenter = 0, distSum = 0;
     for (let i = 0; i < Math.round((EXTRACT_CALL_TIME + 0.5) / DT); i++) {
       p.invulnT = 1;
       const t = i * DT;
@@ -1421,6 +1423,13 @@ section("脱出の防衛", () => {
       p.pos = out ? { x: ex.pos.x + EXTRACT_RADIUS + 2, y: ex.pos.y } : { ...ex.pos };
       step(w, { ...emptyInput(), aim: { x: p.pos.x + 1, y: p.pos.y } });
       const byId = new Map(w.actors.map((a) => [a.id, a]));
+      for (const a of w.actors) {
+        if (known.has(a.id) || a.team !== "enemy" || !a.alive) continue;
+        const dc = Math.hypot(a.pos.x - ex.pos.x, a.pos.y - ex.pos.y);
+        samples++;
+        distSum += dc;
+        if (dc < 10) nearCenter++;
+      }
       for (const ev of w.events) {
         if (ev.type === "hit") {
           const v = byId.get(ev.actor), k = byId.get(ev.by);
@@ -1439,7 +1448,7 @@ section("脱出の防衛", () => {
     const sent = w.sent;
     console.log(
       `脱出の防衛 seed=${seed}: 壁 ${walls}枚、寄せた敵 ${waves.length}人（勢力 ${factions}）・迎えが来た時に生きている ${waves.filter((a) => a.alive).length}人、`
-        + `脱出地点の 50m 内で 敵どうしで倒れた ${infight}人・それ以外で倒れた ${byPlayerSide}人、寄せた敵どうしのダメージ ${waveDmg}・プレイヤーが受けたダメージ ${dmgToPlayer}、寄せた敵と脱出地点の距離 ${waves.filter((a) => a.alive).map((a) => Math.round(Math.hypot(a.pos.x - ex.pos.x, a.pos.y - ex.pos.y))).join("・")}m、迎えが来た ${ex.ready}、送った割合 ${(w.defense!.share * 100).toFixed(0)}%（上限 ${D.secureShare * 100}%）・円の外の8秒で増えた ${((shareIn - shareOut) * 100).toFixed(1)}%、`
+        + `脱出地点の 50m 内で 敵どうしで倒れた ${infight}人・それ以外で倒れた ${byPlayerSide}人、寄せた敵どうしのダメージ ${waveDmg}・プレイヤーが受けたダメージ ${dmgToPlayer}、寄せた敵が脱出地点の 10m 内にいた割合 ${samples ? ((nearCenter / samples) * 100).toFixed(0) : "-"}%・距離の平均 ${samples ? (distSum / samples).toFixed(0) : "-"}m、迎えが来た時の距離 ${waves.filter((a) => a.alive).map((a) => Math.round(Math.hypot(a.pos.x - ex.pos.x, a.pos.y - ex.pos.y))).join("・")}m、迎えが来た ${ex.ready}、送った割合 ${(w.defense!.share * 100).toFixed(0)}%（上限 ${D.secureShare * 100}%）・円の外の8秒で増えた ${((shareIn - shareOut) * 100).toFixed(1)}%、`
         + `送った物 お金 ${sent.money}/${before.money}・金属くず ${sent.items.junk ?? 0}/${before.junk}・電子部品 ${sent.items.circuit ?? 0}/${before.circuit}`,
     );
   }

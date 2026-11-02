@@ -1,4 +1,4 @@
-// 脱出の迎えを待つ間の防衛。壁を立て、勢力の違う敵のグループを別々の方向から寄せ、円の中にいる間にカバンの中身を送る
+// 脱出の迎えを待つ間の防衛。壁を立て、呼んだ音で周りの敵を寄せ、勢力の違う敵のグループを別々の方向に置き、円の中にいる間にカバンの中身を送る
 import { DT, ENEMY_SPAWNS, EXTRACT_CALL_HEAR, EXTRACT_CALL_TIME, EXTRACT_DEFENSE, EXTRACT_RADIUS, ITEM_ORDER, ITEMS, SECURABLE, type ItemId } from "./data";
 import { alert, hostile } from "./ai";
 import { flying } from "./evac";
@@ -35,16 +35,13 @@ export function callExtract(w: World, e: Extract, caller: Actor): boolean {
       angle: base + (i * Math.PI * 2) / D.waves.length + rng.range(-0.3, 0.3),
       done: false,
     })),
-    rally: new Map(),
+    nextCall: w.time + D.callEvery,
     startedAt: w.time,
   };
   raiseWalls(w, e);
+  callNoise(w, caller);
   w.events.push({ type: "extractCall", pos: { ...e.pos } });
   w.events.push({ type: "notice", text: `脱出の迎えを呼んだ。${EXTRACT_CALL_TIME}秒耐える。円の中にいる間、持ち物を送る` });
-  for (const o of w.actors) {
-    if (!o.ai || o.team !== "enemy" || !o.alive || !hostile(o, caller)) continue;
-    if (dist(o.pos, e.pos) < EXTRACT_CALL_HEAR) addRally(w, o, Math.atan2(o.pos.y - e.pos.y, o.pos.x - e.pos.x));
-  }
   return true;
 }
 
@@ -67,20 +64,21 @@ function raiseWalls(w: World, e: Extract) {
   }
 }
 
-/** 脱出地点から angle の向きに rally m の所。建物の中や見通せない所なら、近く・横へずらす */
-function rallyPoint(w: World, e: Extract, angle: number): Vec {
-  for (let r = EXTRACT_DEFENSE.rally; r >= 5; r -= 2) {
-    for (const da of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9]) {
-      const p = { x: e.pos.x + Math.cos(angle + da) * r, y: e.pos.y + Math.sin(angle + da) * r };
-      if (w.map.walkable(p.x, p.y) && w.map.los(e.pos, p)) return p;
-    }
+/**
+ * 呼んだ音を鳴らす。聞いた敵は、遠くの銃声を聞いたときと同じく、相手を決めずに脱出地点へ寄る。
+ * 見えている相手がいる敵と、少し前まで相手を見ていた敵は、その撃ち合いを続ける
+ */
+function callNoise(w: World, caller: Actor) {
+  const d = w.defense!;
+  const at = d.extract.pos;
+  for (const o of w.actors) {
+    const ai = o.ai;
+    if (!ai || o.team !== "enemy" || !o.alive || !hostile(o, caller)) continue;
+    if (dist(o.pos, at) >= EXTRACT_CALL_HEAR) continue;
+    ai.rival = true;
+    if (ai.canSee || (ai.state !== "patrol" && w.time - ai.lastSeenT < EXTRACT_DEFENSE.callEvery)) continue;
+    alert(w, o, at, null, false);
   }
-  return { ...e.pos };
-}
-
-function addRally(w: World, o: Actor, angle: number) {
-  w.defense!.rally.set(o.id, rallyPoint(w, w.defense!.extract, angle));
-  o.ai!.rival = true;
 }
 
 /** angle の向きの、脱出地点から wave m ほどの歩ける所にグループを置く */
@@ -109,8 +107,8 @@ function spawnWave(w: World, faction: number, angle: number) {
       }
     }
     const o = makeEnemy(w, rng, kind, faction, { ...p }, gid, false);
+    o.ai!.rival = true;
     w.actors.push(o);
-    addRally(w, o, angle);
   }
 }
 
@@ -146,16 +144,9 @@ export function tickDefense(w: World) {
     wave.done = true;
     spawnWave(w, wave.faction, wave.angle);
   }
-  // 見失った敵も、脱出地点の自分の側へ戻らせる
-  for (const o of w.actors) {
-    const to = d.rally.get(o.id);
-    const ai = o.ai;
-    if (!to || !ai || !o.alive || ai.canSee) continue;
-    if (ai.state === "patrol") alert(w, o, to, null, false);
-    else if (!ai.lastSeen || w.time - ai.lastSeenT > 2) {
-      ai.lastSeen = { ...to };
-      ai.lastSeenT = w.time;
-    }
+  if (!d.extract.ready && w.time >= d.nextCall) {
+    d.nextCall = w.time + EXTRACT_DEFENSE.callEvery;
+    callNoise(w, w.player);
   }
   send(w);
 }
