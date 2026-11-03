@@ -20,6 +20,8 @@ import { Rng } from "../src/sim/rng";
 import { makeEnemy, syncSpawns } from "../src/sim/spawn";
 import { emptyInput, nearestLoot, step, type Input } from "../src/sim/sim";
 import { createWorld, type Actor, type World } from "../src/sim/world";
+import { buildRangeChunk, createRangeWorld, rangeChunk, rangeReadout } from "../src/sim/range";
+import { theoreticalTtk } from "../src/sim/stats";
 import { alert, angleDiff } from "../src/sim/ai";
 import {
   applyRunResult, craft, craftBlocker, defaultProfile, makeRunLoadout, setAttachment, setLoadoutBike, setLoadoutRevive, setLoadoutSecureBag, setLoadoutWeapon, type Profile,
@@ -1715,6 +1717,61 @@ section("押されている敵はプレイヤーを後回しにする", () => {
     const idle = run(seed, false), shot = run(seed, true);
     console.log(`押されている敵 seed=${seed}: ${idle && shot ? `手を出さない 6秒 ${idle}／最初の1秒 勢力Aを撃つ 6秒 ${shot}` : "置き場所が見つからない"}`);
   }
+});
+
+section("射撃場", () => {
+  const m = new GameMap(mapIndex);
+  m.addChunk(buildRangeChunk(...rangeChunk(m)));
+  for (const type of ["ar", "smg", "long", "shotgun", "pistol"] as WeaponType[]) {
+    const prof = defaultProfile();
+    if (!prof.weapons.includes(type)) prof.weapons.push(type);
+    setLoadoutWeapon(prof, 0, type);
+    const w = createRangeWorld(m, makeRunLoadout(prof));
+    const p = w.player;
+    const ammo = p.weapons[0].def.ammo;
+    const stockAmmo = bagCount(w.bag, ammo);
+    const targets = w.range!.targets;
+    // 止まった的は距離の近いほうから、射程に入るものだけを撃つ
+    const def = p.weapons[0].def;
+    const pick = [...targets].filter((t) => t.distance <= def.range).sort((a, b) => a.distance - b.distance);
+    for (const t of pick) {
+      const a = w.actors.find((x) => x.id === t.actor)!;
+      p.pos = { x: a.pos.x, y: a.pos.y + Math.min(t.distance, 10) };
+      for (let i = 0; i < 30 * 8; i++) {
+        const input = emptyInput();
+        input.aim = { ...a.pos };
+        input.fire = a.alive;
+        step(w, input);
+      }
+    }
+    const r = rangeReadout(w);
+    const ttk = theoreticalTtk(def).ttk;
+    const deathboxes = w.loot.filter((l) => l.kind === "deathbox").length;
+    const fastest = Math.min(...r.kills.map((k) => k.time));
+    if (bagCount(w.bag, ammo) < stockAmmo - def.mag) throw new Error(`${def.name}: 弾薬が減ったまま ${bagCount(w.bag, ammo)} / ${stockAmmo}`);
+    if (deathboxes) throw new Error(`${def.name}: 的が持ち物を落とした`);
+    // 弾が飛ぶ時間をティック単位で数えるので、1ティックはずれる
+    if (r.kills.length && fastest < ttk - DT - 1e-6) throw new Error(`${def.name}: 理論 TTK ${ttk} より速く倒した ${fastest}`);
+    applyDamage(w, p, 999, undefined, p.pos);
+    if (!p.alive || w.outcome !== "playing") throw new Error("射撃場でプレイヤーが倒れた");
+    console.log(`${def.name}: 理論 TTK ${ttk.toFixed(2)}秒・最速 ${r.kills.length ? fastest.toFixed(2) : "—"}秒・倒した ${r.kills.length}回・命中率 ${r.accuracy === null ? "—" : Math.round(r.accuracy * 100) + "%"}`);
+  }
+  // 倒した的は戻り、敵も箱も置かない
+  const w = createRangeWorld(m, baseLoadout);
+  const t = w.range!.targets[0];
+  const a = w.actors.find((x) => x.id === t.actor)!;
+  applyDamage(w, a, 999, w.player, a.pos);
+  for (let i = 0; i < 30 * 3; i++) step(w, emptyInput());
+  if (!a.alive || a.shield !== a.shieldMax) throw new Error("倒した的が戻らない");
+  if (w.actors.some((x) => x.team === "enemy" && x.ai) || w.loot.length) throw new Error("射撃場に敵か箱が置かれた");
+  const mover = w.range!.targets.find((x) => x.moving)!;
+  const ma = w.actors.find((x) => x.id === mover.actor)!;
+  const xs: number[] = [];
+  for (let i = 0; i < 30 * 6; i++) {
+    step(w, emptyInput());
+    xs.push(ma.pos.x - mover.home.x);
+  }
+  console.log(`動く的の幅 ${Math.min(...xs).toFixed(1)}〜${Math.max(...xs).toFixed(1)}m`);
 });
 
 type Done = { k: number; out: string; error?: string; ms: number };

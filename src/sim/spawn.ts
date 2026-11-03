@@ -243,6 +243,7 @@ function depopulate(w: World, key: string) {
 
 /** GameMap に置いてある区画と、敵と箱を置いた区画を揃える */
 export function syncSpawns(w: World) {
+  if (w.range) return;
   for (const key of [...w.spawned.keys()]) if (!w.map.chunks.has(key)) depopulate(w, key);
   for (const [key, c] of w.map.chunks) if (!w.spawned.has(key)) populate(w, c);
 }

@@ -12,6 +12,7 @@ import {
   SECURABLE, type BuffId, type DeviceKind, type HealKind, type ItemId, type ThrowableId,
 } from "./data";
 import { syncSpawns } from "./spawn";
+import { tickRange } from "./range";
 import { boardRail, hitBarrier, nearRail, rideStep, tickSkillObjects, tickSkills, useSkill, useUlt } from "./skills";
 import { bagAdd, bagCount, bagRemove, sortBag, type Bag } from "./inventory";
 import { cancelEvac, evacStep, flying, launchEvac } from "./evac";
@@ -444,6 +445,7 @@ function updateBullets(w: World, byId: Map<number, Actor>) {
       b.alive = false;
       if (hitActor) {
         const shooter = byId.get(b.owner);
+        if (w.range && shooter === w.player) w.range.pelletsHit++;
         applyDamage(w, hitActor, b.damage, shooter, at);
         if (shooter === w.player) w.focus = { actor: hitActor.id, t: w.time };
         if (hitActor.ai && shooter) alert(w, hitActor, shooter.pos, shooter);
@@ -491,7 +493,8 @@ function updateInfo(w: World) {
       continue;
     }
     const d = dist(e.pos, p.pos);
-    e.seen = d <= SIGHT_RANGE && w.map.los(p.pos, e.pos);
+    // 射撃場では、遠距離武器の射程の先の的まで見えるようにする
+    e.seen = (w.range !== null || d <= SIGHT_RANGE) && w.map.los(p.pos, e.pos);
     const partnerSees = !e.seen && partners.some((o) => dist(o.pos, e.pos) <= SIGHT_RANGE && w.map.los(o.pos, e.pos));
     let level = e.seen || partnerSees ? w.debug.sightLevel : 0;
     if (d <= BEACON_RADIUS) level = Math.max(level, w.debug.beaconLevel);
@@ -563,4 +566,5 @@ export function step(w: World, input: Input) {
       e.progress = 0;
     }
   }
+  if (w.range) tickRange(w);
 }

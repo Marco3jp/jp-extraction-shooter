@@ -9,6 +9,7 @@ import { computeWeapon } from "./stats";
 import { refreshStats } from "./skills";
 import { bagAdd, makeBag, type Bag, type Stack } from "./inventory";
 import { GameMap, type Vec } from "./map";
+import type { RangeState } from "./range";
 import { Rng } from "./rng";
 import { syncSpawns, type ChunkMemory, type SpawnRef } from "./spawn";
 
@@ -350,6 +351,8 @@ export type World = {
   nextSolo: number;
   /** 固定レールとダッシュパッドの番号。負の数で数え、nextId は使わない。人の番号が地図の設備の数でずれないように */
   nextFixed: number;
+  /** 射撃場にいるときの的と数値。ランでは null */
+  range: RangeState | null;
 };
 
 export function makeActor(id: number, team: Actor["team"], kind: Actor["kind"], faction: number, pos: Vec, weapons: WeaponDef[], shieldMax: number): Actor {
@@ -455,8 +458,8 @@ export function pickWeighted(rng: Rng, weights: number[]): number {
   return weights.length - 1;
 }
 
-/** start を渡すと、その近くの空いている場所から始める（キャンプ）。渡さなければマップの出発地点から */
-export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, start?: Vec): World {
+/** start を渡すと、その近くの空いている場所から始める（キャンプ）。渡さなければマップの出発地点から。range を渡すと敵と箱を置かない */
+export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, start?: Vec, range: RangeState | null = null): World {
   const rng = new Rng(seed);
 
   const nearestFree = (px: number, py: number): Vec | null => {
@@ -535,6 +538,7 @@ export function createWorld(map: GameMap, seed: number, loadout: RunLoadout, sta
     nextGroup: 0,
     nextSolo: 0,
     nextFixed: -1,
+    range,
   };
   syncSpawns(w);
 

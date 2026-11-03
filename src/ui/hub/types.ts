@@ -24,6 +24,8 @@ export type HubProps = {
   /** profile の複製を書き換えてから渡す。呼んだ側で保存して再描画する */
   onChange: (next: Profile) => void;
   onDeploy: () => void;
+  /** 出撃準備の組み立てのまま射撃場に入る */
+  onRange: () => void;
   onDismissResult: () => void;
   /** セーブを JSON ファイルとして書き出す */
   onExport: () => void;

@@ -219,6 +219,12 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
   if (hadShield && target.shield <= 0) {
     w.events.push({ type: "shieldBreak", actor: target.id, pos: { ...target.pos } });
   }
+  if (target.health <= 0 && w.range && target.team === "player") {
+    target.health = HEALTH_MAX;
+    target.shield = target.shieldMax;
+    w.events.push({ type: "notice", text: "射撃場では倒れない。体力を戻した" });
+    return;
+  }
   if (target.health <= 0 && selfRevive(w, target)) return;
   if (target.health <= 0) {
     target.health = 0;
@@ -229,7 +235,9 @@ export function applyDamage(w: World, target: Actor, dmg: number, by: Actor | un
     if (target.bike) target.bike.state = "off";
     w.events.push({ type: "death", actor: target.id, by: by?.id ?? 0, pos: { ...target.pos } });
     if (by && by !== target) onKill(w, by);
-    if (target.team === "enemy") {
+    if (target.team === "enemy" && w.range) {
+      // 的は倒しても持ち物を落とさず、tickRange が元の場所に戻す
+    } else if (target.team === "enemy") {
       if (by?.team === "player") w.kills++;
       w.loot.push({
         id: w.nextId++, spawn: null, pos: { ...target.pos }, kind: "deathbox",

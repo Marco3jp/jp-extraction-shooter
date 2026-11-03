@@ -445,6 +445,51 @@ body {
   background: #15171b;
 }
 
+#range {
+  display: none;
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 320px;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: rgba(10, 14, 20, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+}
+#range .title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+#range dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+}
+#range dt { color: var(--muted); }
+#range dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+#range .sub {
+  margin-top: 10px;
+  color: var(--muted);
+}
+#range table {
+  width: 100%;
+  margin-top: 2px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+#range td { padding: 1px 0; white-space: nowrap; }
+#range td:first-child { font-weight: 700; }
+#range td:nth-child(3) { text-align: right; color: var(--muted); }
+#range .muted { color: var(--muted); font-weight: 400; }
+body.in-range #range { display: block; }
+body.in-range #minimap,
+body.in-range #feed,
+body.in-range #extract-arrow,
+body.in-range #attribution { display: none; }
+
 #feed {
   position: absolute;
   top: 244px;

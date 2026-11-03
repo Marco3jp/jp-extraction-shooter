@@ -61,7 +61,7 @@ export function Hub(props: HubProps) {
             onChange={props.onChange}
           />
         )}
-        {tab === "loadout" && <Loadout profile={profile} mapId={props.map.index.id} onChange={props.onChange} onDeploy={props.onDeploy} />}
+        {tab === "loadout" && <Loadout profile={profile} mapId={props.map.index.id} onChange={props.onChange} onDeploy={props.onDeploy} onRange={props.onRange} />}
         {tab === "craft" && <Craft profile={profile} onChange={props.onChange} />}
         {tab === "stash" && <Stash profile={profile} />}
         {tab === "save" && <SaveTab onExport={props.onExport} onImport={props.onImport} onReset={props.onReset} />}

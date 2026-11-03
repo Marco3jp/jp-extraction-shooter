@@ -504,3 +504,16 @@
   flex-direction: column;
   gap: 4px;
 }
+
+.hub-deploy-row {
+  display: flex;
+  gap: 8px;
+}
+.hub-deploy-row .hub-deploy {
+  flex: 1;
+}
+.hub-range {
+  margin-top: 8px;
+  padding: 0 24px;
+  font-size: 16px;
+}

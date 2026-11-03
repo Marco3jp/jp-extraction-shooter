@@ -9,6 +9,8 @@ import { bagCount, bagUsed, type Stack } from "./sim/inventory";
 import { downedPartnerNear, extractAt, nearestLoot, type Command } from "./sim/sim";
 import { evacBlocker } from "./sim/evac";
 import { nearRail } from "./sim/skills";
+import { rangeReadout } from "./sim/range";
+import { theoreticalTtk } from "./sim/stats";
 import type { Actor, Extract, GameEvent, Loot, World } from "./sim/world";
 import type { Renderer } from "./render/renderer";
 import { MapView, type EvacPick, type Ping } from "./mapview";
@@ -350,8 +352,28 @@ export class Hud {
     });
   }
 
+  private updateRange(w: World) {
+    const el = $("#range");
+    if (!w.range) return;
+    const r = rangeReadout(w);
+    const ttk = theoreticalTtk(r.weapon);
+    const acc = r.accuracy === null ? "—" : `${Math.round(r.accuracy * 100)}%`;
+    const kills = r.kills.length
+      ? r.kills.map((k) => `<tr><td>${k.time.toFixed(2)}秒</td><td>${k.distance}m・${k.moving ? "動く" : "止まった"}的</td><td>${k.weapon}</td></tr>`).join("")
+      : `<tr><td colspan="3" class="muted">的を倒すと、最初に当ててから倒すまでの時間が出る</td></tr>`;
+    this.setHtml(el,
+      `<div class="title">${r.weapon.name}</div>` +
+      `<dl>` +
+      `<dt>理論 TTK</dt><dd>${ttk.ttk.toFixed(2)}秒（${ttk.shots}発）</dd>` +
+      `<dt>DPS</dt><dd>${Math.round(r.dps)}<span class="muted">（直近3秒）</span></dd>` +
+      `<dt>命中率</dt><dd>${acc}</dd>` +
+      `</dl>` +
+      `<div class="sub">倒すまでの時間</div><table>${kills}</table>`);
+  }
+
   private updateAreaBanner(w: World, dt: number) {
     const el = $("#area-banner");
+    if (w.range) return;
     const area = w.map.areaAt(w.player.pos.x, w.player.pos.y);
     if (area && area !== this.shownArea && w.time - this.lastCombatT > COMBAT_HOLD && w.player.alive) {
       this.shownArea = area;
@@ -376,8 +398,9 @@ export class Hud {
   update(w: World, r: Renderer, mouse: { x: number; y: number }, dt: number) {
     const p = w.player;
     const alive = w.actors.filter((a) => a.team === "enemy" && a.alive).length;
-    this.setHtml($("#info"),
-      `<div class="map">${w.map.name}</div>` +
+    this.setHtml($("#info"), w.range
+      ? `<div class="map">射撃場</div><div>Esc / P のポーズから拠点に戻る</div>`
+      : `<div class="map">${w.map.name}</div>` +
       `<div>${fmtTime(w.time)}　撃破 ${w.kills}　残り ${alive}</div>` +
       `<div class="debug">視線 [N]: ${LEVEL_NAMES[w.debug.sightLevel]}<br>ビーコン [B]: ${LEVEL_NAMES[w.debug.beaconLevel]}</div>`);
 
@@ -502,21 +525,24 @@ export class Hud {
     $("#damage").style.opacity = String(Math.max(0, this.dmgTimer / 0.35) * 0.6 + (p.health < 40 && p.alive ? 0.25 : 0));
 
     const target = arrowTarget(w);
-    const ex = r.worldToScreen(target.pos.x, target.pos.y, 2);
     const arrow = $("#extract-arrow");
-    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
-    const onScreen = ex.visible && ex.x > 40 && ex.x < window.innerWidth - 40 && ex.y > 40 && ex.y < window.innerHeight - 40;
-    let ax = ex.x, ay = ex.y;
-    if (!onScreen) {
-      const dx = ex.x - cx, dy = ex.y - cy;
-      const s = Math.min((cx - 60) / Math.abs(dx || 1), (cy - 60) / Math.abs(dy || 1));
-      ax = Math.max(60, Math.min(window.innerWidth - 260, cx + dx * s));
-      ay = Math.max(150, Math.min(window.innerHeight - 140, cy + dy * s));
+    arrow.style.visibility = target ? "" : "hidden";
+    if (target) {
+      const ex = r.worldToScreen(target.pos.x, target.pos.y, 2);
+      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+      const onScreen = ex.visible && ex.x > 40 && ex.x < window.innerWidth - 40 && ex.y > 40 && ex.y < window.innerHeight - 40;
+      let ax = ex.x, ay = ex.y;
+      if (!onScreen) {
+        const dx = ex.x - cx, dy = ex.y - cy;
+        const s = Math.min((cx - 60) / Math.abs(dx || 1), (cy - 60) / Math.abs(dy || 1));
+        ax = Math.max(60, Math.min(window.innerWidth - 260, cx + dx * s));
+        ay = Math.max(150, Math.min(window.innerHeight - 140, cy + dy * s));
+      }
+      arrow.style.transform = `translate(${ax}px, ${ay}px)`;
+      const meters = Math.round(Math.hypot(target.pos.x - p.pos.x, target.pos.y - p.pos.y));
+      const wait = target.ready ? "　来ている" : target.readyAt !== null ? `　あと${Math.ceil(target.readyAt - w.time)}秒` : "";
+      arrow.querySelector(".dist")!.textContent = `脱出 ${meters}m${wait}`;
     }
-    arrow.style.transform = `translate(${ax}px, ${ay}px)`;
-    const meters = Math.round(Math.hypot(target.pos.x - p.pos.x, target.pos.y - p.pos.y));
-    const wait = target.ready ? "　来ている" : target.readyAt !== null ? `　あと${Math.ceil(target.readyAt - w.time)}秒` : "";
-    arrow.querySelector(".dist")!.textContent = `脱出 ${meters}m${wait}`;
 
     this.updateDefense(w);
 
@@ -542,6 +568,7 @@ export class Hud {
     this.updateTags(w, r);
     this.updateDmgStacks(w, r);
     this.updateAreaBanner(w, dt);
+    this.updateRange(w);
   }
 
   /** 長距離移動の行き先を選んでいる間は、全体マップを開いたままにする */
@@ -831,12 +858,13 @@ export class Hud {
   }
 }
 
-/** 矢印で指す脱出地点。呼んでいる所があればそこ、無ければ一番近い所 */
-function arrowTarget(w: World): Extract {
+/** 矢印で指す脱出地点。呼んでいる所があればそこ、無ければ一番近い所。脱出地点が無ければ（射撃場）null */
+function arrowTarget(w: World): Extract | null {
   const called = w.extracts.find((e) => e.readyAt !== null);
   if (called) return called;
   const p = w.player.pos;
   let best = w.extracts[0];
+  if (!best) return null;
   for (const e of w.extracts) {
     if (Math.hypot(e.pos.x - p.x, e.pos.y - p.y) < Math.hypot(best.pos.x - p.x, best.pos.y - p.y)) best = e;
   }

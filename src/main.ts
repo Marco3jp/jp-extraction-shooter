@@ -18,6 +18,7 @@ import { MapView } from "./mapview";
 import { extractAt } from "./sim/sim";
 import { exportProfile, importProfile, loadProfile, saveProfile } from "./meta/save";
 import { renderHub } from "./ui/hub";
+import { buildRangeChunk, createRangeWorld, rangeChunk, rangeStart } from "./sim/range";
 import type { LastRunSummary } from "./ui/hub/types";
 
 type Mode = "hub" | "playing" | "paused" | "ending";
@@ -95,6 +96,7 @@ async function main() {
         drawHub();
       },
       onDeploy: deploy,
+      onRange: enterRange,
       onDismissResult: () => {
         lastResult = null;
         drawHub();
@@ -166,6 +168,32 @@ async function main() {
     resume();
   }
 
+  // 地図の区画を全部捨ててから、射撃場の区画を置く。射撃場の区画は地図から離してあるので、出撃するときの dropAround で捨てられる
+  function enterRange() {
+    if (deploying) return;
+    streamer.dropAround(rangeStart(map));
+    const [i, j] = rangeChunk(map);
+    if (!map.hasChunk(i, j)) map.addChunk(buildRangeChunk(i, j));
+    world = createRangeWorld(map, makeRunLoadout(profile));
+    renderer.reset();
+    hud.reset(world);
+    hubEl.style.display = "none";
+    document.body.classList.remove("in-hub");
+    document.body.classList.add("in-range");
+    resume();
+  }
+
+  // 脱出した直後に来ていたら、キャンプを選べるように脱出地点の周りの区画を読み直す
+  const leaveRange = async () => {
+    mode = "ending";
+    const [i, j] = rangeChunk(map);
+    map.removeChunk(i, j);
+    map.resetSolid();
+    if (lastResult?.extractAt) await streamer.loadAround(lastResult.extractAt);
+    document.body.classList.remove("in-range");
+    showHub();
+  };
+
   const pause = () => {
     if (mode !== "playing") return;
     mode = "paused";
@@ -176,8 +204,11 @@ async function main() {
   // 確かめる画面を開いているときは、画面を隠さずにキャラを選べるようにする
   const showPauseView = () => {
     inspector.setPaused(inspector.enabled);
+    const leave = world.range
+      ? `<button class="retire" data-retire>拠点に戻る</button>`
+      : `<button class="retire" data-retire>リタイアして拠点に戻る（死んだときと同じく、拾った物を失う）</button>`;
     showOverlay(inspector.enabled ? null : `<h1>ポーズ</h1>${controls}<p class="hint">Esc / P / クリックで再開</p>
-      <button class="retire" data-retire>リタイアして拠点に戻る（死んだときと同じく、拾った物を失う）</button>`);
+      ${leave}`);
   };
   const togglePause = () => {
     if (mode === "playing") pause();
@@ -242,7 +273,7 @@ async function main() {
     return true;
   };
   input.onMap = () => {
-    if (mode === "playing") hud.bigMap = !hud.bigMap;
+    if (mode === "playing" && !world.range) hud.bigMap = !hud.bigMap;
   };
   input.onInteract = () => {
     if (mode !== "playing" || !hud.panel.open || hud.panel.lootId === null) return false;
@@ -278,7 +309,10 @@ async function main() {
   overlay.addEventListener("mousedown", (e) => {
     e.stopPropagation();
     if (mode !== "paused") return;
-    if ((e.target as HTMLElement).closest("[data-retire]")) {
+    if ((e.target as HTMLElement).closest("[data-retire]") && world.range) {
+      showOverlay(null);
+      void leaveRange();
+    } else if ((e.target as HTMLElement).closest("[data-retire]")) {
       world.outcome = "dead";
       mode = "ending";
       showOverlay(null);
@@ -293,7 +327,7 @@ async function main() {
   window.addEventListener("resize", () => renderer.resize());
   // 誤って Ctrl+W などでタブを閉じかけても、ランの途中なら確認を出す
   window.addEventListener("beforeunload", (e) => {
-    if (mode === "playing" || mode === "paused") e.preventDefault();
+    if ((mode === "playing" || mode === "paused") && !world.range) e.preventDefault();
   });
 
   showHub();
@@ -309,7 +343,7 @@ async function main() {
     if (mode === "playing") {
       // 長距離移動で飛んでいる間は、行き先の周りも読む
       const ev = world.player.evac;
-      streamer.update(world.player.pos, world.player.vel, ev?.state === "fly" ? ev.to : null);
+      if (!world.range) streamer.update(world.player.pos, world.player.vel, ev?.state === "fly" ? ev.to : null);
       acc += dt;
       let steps = 0;
       while (acc >= DT && steps < 5) {

@@ -31,9 +31,10 @@ type Props = {
   mapId: string;
   onChange: (next: Profile) => void;
   onDeploy: () => void;
+  onRange: () => void;
 };
 
-export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
+export function Loadout({ profile, mapId, onChange, onDeploy, onRange }: Props) {
   const [editing, setEditing] = useState<WeaponType>(profile.loadout.weapons[0]);
   const target = profile.weapons.includes(editing) ? editing : profile.loadout.weapons[0];
 
@@ -202,9 +203,14 @@ export function Loadout({ profile, mapId, onChange, onDeploy }: Props) {
             )}
           </div>
         </div>
-        <button class="hub-deploy" onClick={onDeploy}>
-          出撃
-        </button>
+        <div class="hub-deploy-row">
+          <button class="hub-deploy" onClick={onDeploy}>
+            出撃
+          </button>
+          <button class="hub-button hub-range" onClick={onRange} title="この組み立てのまま的を撃てる。弾薬・回復・投げ物は減らず、保管庫も変わらない">
+            射撃場
+          </button>
+        </div>
       </section>
 
       <section class="hub-panel">
