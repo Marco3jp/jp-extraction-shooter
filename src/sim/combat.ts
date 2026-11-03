@@ -129,11 +129,16 @@ export function tickTimers(w: World, a: Actor) {
 /** 引き金を引いている間、毎ティック呼ぶ。撃てたら true */
 export function pullTrigger(w: World, a: Actor, aimAngle: number, extraSpreadDeg = 0): boolean {
   const ws = weapon(a);
-  if (a.heal || a.swapT > 0 || a.reloadT > 0 || a.readyT > 0) return false;
+  // 撃てない間に fireCd が負に溜まると、撃てるようになった最初のティックでまとめて撃ってしまう
+  if (a.heal || a.swapT > 0 || a.reloadT > 0 || a.readyT > 0) {
+    releaseTrigger(a);
+    return false;
+  }
   // 弾倉なしの間は、マガジンの代わりにカバンの弾を減らす
   const bottomless = bottomlessOn(a);
   const loaded = () => (bottomless ? reserve(w, a) > 0 : ws.mag > 0);
   if (!loaded()) {
+    releaseTrigger(a);
     if (!bottomless) startReload(w, a);
     return false;
   }
