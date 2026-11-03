@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "ttk": "rolldown tools/ttk.ts -p node -o node_modules/.cache/ttk.mjs --log-level silent && node node_modules/.cache/ttk.mjs",
+    "headless": "rolldown tools/screenshot.ts -p node -o node_modules/.cache/screenshot.mjs --external playwright-core --log-level silent && node node_modules/.cache/screenshot.mjs",
     "map": "python3 -I tools/osm_to_map.py",
     "smoke": "rolldown tools/smoke.ts -p node -o node_modules/.cache/smoke.mjs --log-level silent && node node_modules/.cache/smoke.mjs",
     "fetch-map": "python3 -I tools/fetch_osm.py",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.187.0",
+    "playwright-core": "^1.64.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
   }
